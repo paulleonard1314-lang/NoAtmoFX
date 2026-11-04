@@ -68,13 +68,23 @@ The *Nuclear* tab controls how blasts affect the clouds: hole size, condensation
 
 *Nuclear > UnlockNukes* (off by default) lets you pick nuclear weapons in any mission, including Free Flight, so you can see the effect without playing through escalation. It only works offline or as host, and the AI is not affected.
 
+## Multiplayer
+
+In multiplayer every player with NoAtmoFX sees the same clouds in the same places, players who join late included.
+
+- The cloud field runs on the mission clock and weather the game already shares between players. This works on any server, including dedicated servers and hosts without mods, as long as all players use the same cloud settings. The *Multiplayer* tab shows a short settings code: if two players have the same code, they see the same clouds.
+- When the host also runs NoAtmoFX, clients with the mod receive the host's cloud settings (Weather, Layer, Shape, Scale, Variation, Wind, Storm and Nuclear tabs), the exact drift and weather state, and the nuclear holes that are still open. Your own settings come back when you leave the game, and the config file is never overwritten with the host's values. Lighting, quality, glass and atmosphere settings stay your own. Turn this off with *Multiplayer > FollowHostSettings*.
+- An F8 test blast set off by the host appears for every client with the mod. A test blast set off by a client is only shown to that client.
+- A player or server without NoAtmoFX is not affected. The mod only sends its messages to players that announced they have it.
+
 ## Nuclear Rain
 
 NoAtmoFX works with or without the Nuclear Rain mod. When Nuclear Rain is installed, rain on the canopy follows it and the rain around the camera is turned off so it is not doubled. Without it, NoAtmoFX uses its own rain under its own clouds. Either behaviour can be forced with *Glass > RainSource* and *Atmosphere > NearRain*.
 
 ## Known limitations
 
-- Multiplayer: every player renders clouds locally, so cloud shapes do not match between players, and hiding in a cloud only hides you on your own screen.
+- Multiplayer: clouds match between players, but hiding in a cloud only hides you on your own screen (radar and IR use the game's cloud layer). Lightning flashes are random for each player.
+- Multiplayer without NoAtmoFX on the host: if a mission trigger changes the wind mid-mission, players who join after the change see the clouds shifted. Weather changes that happen after you joined stay in step.
 - Radar and IR seekers still use the game's own cloud layer.
 
 ## Building from source

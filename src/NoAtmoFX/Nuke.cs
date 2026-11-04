@@ -5,6 +5,7 @@
 // MushroomCloud in the same effect (renderer bounds), with a simple model as fallback.
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -28,6 +29,8 @@ namespace NoAtmoFX
             public Vector3 g;            // global position at detonation (y above sea level)
             public double wx, wz;        // cloud drift at detonation
             public float t0, kt, bp;
+            public double tm;            // mission time of the blast (shared clock in multiplayer)
+            public int seed;
             public Renderer cap;         // the game's mushroom cap (may be null -> model)
             public Vector3 capG;         // model cap: global position, carried by the game wind
             public float lastCapY, lastCapT;
@@ -101,7 +104,7 @@ namespace NoAtmoFX
             catch (Exception e) { NOCloudsPlugin.Log.LogWarning("Nuclear: " + e.Message); }
         }
 
-        void Add(Vector3 world, float kt, Component src, double wx, double wz)
+        void Add(Vector3 world, float kt, Component src, double wx, double wz, bool test = false)
         {
             Renderer cap = null;
             if (src != null)
@@ -120,15 +123,102 @@ namespace NoAtmoFX
                 }
                 if (mc == null && kt < MinYield.Value) { NOCloudsPlugin.Log.LogInfo($"Nuclear: blast of {kt * 1000:F1} t ignored (no mushroom cloud, below MinYield)."); return; }
             }
+            Vector3 g0 = world - Datum.originPosition;
+            var sy = _p.Sync;
+            bool mp = sy != null && sy.Shared;
+            double tm = mp ? sy.T : Time.timeSinceLevelLoad;
+            // the same blast seen by another player: already there (the host also sends the blasts it sees)
+            if (mp) { var seen = Near(g0, tm); if (seen != null) { if (seen.cap == null && cap != null) seen.cap = cap; return; } }
+            // rings: same random numbers for every player (seed from the place, not the local time)
+            int seed = Mathf.RoundToInt(g0.x / 250f) * 73856093 ^ Mathf.RoundToInt(g0.z / 250f) * 19349663 ^ Mathf.RoundToInt(kt * 10f);
+            var b = New(g0, kt, wx, wz, tm, seed, 0f);
+            b.cap = cap;
+            if (mp && sy.IsHost && (src != null || test)) sy.HostBlast(Pack(new List<Blast> { b }, sy.T));
+            NOCloudsPlugin.Log.LogInfo($"Nuclear: {kt:F2} kt at altitude {b.g.y:F0} m, blast radius {b.bp:F0} m, hole {b.bp * HoleSize.Value / 1000:F1} km, mushroom cap {(cap != null ? "found" : "model")}.");
+        }
+
+        Blast New(Vector3 g, float kt, double wx, double wz, double tm, int seed, float age)
+        {
             var b = new Blast
             {
-                g = world - Datum.originPosition, wx = wx, wz = wz, t0 = Time.time, kt = kt,
-                bp = Mathf.Pow(Mathf.Max(kt, 1e-4f) * 1e6f, 1f / 3f), cap = cap, rng = new System.Random((int)(Time.time * 1000) ^ (int)world.x)
+                g = g, wx = wx, wz = wz, t0 = Time.time - age, kt = kt, tm = tm, seed = seed,
+                bp = Mathf.Pow(Mathf.Max(kt, 1e-4f) * 1e6f, 1f / 3f), rng = new System.Random(seed)
             };
-            b.capG = b.g; b.lastCapY = b.g.y; b.lastCapT = Time.time;
+            b.capG = b.g; b.lastCapY = b.g.y; b.lastCapT = b.t0;
             _b.Add(b);
             if (_b.Count > MAX) _b.RemoveAt(0);
-            NOCloudsPlugin.Log.LogInfo($"Nuclear: {kt:F2} kt at altitude {b.g.y:F0} m, blast radius {b.bp:F0} m, hole {b.bp * HoleSize.Value / 1000:F1} km, mushroom cap {(cap != null ? "found" : "model")}.");
+            return b;
+        }
+
+        Blast Near(Vector3 g, double tm)
+        {
+            foreach (var x in _b) if (Math.Abs(x.tm - tm) < 20 && (x.g - g).sqrMagnitude < 1500f * 1500f) return x;
+            return null;
+        }
+
+        // ---- multiplayer: blasts the host knows, for players who join later or did not see them ----
+        internal byte[] Pack(double now, bool all) => Pack(_b, now);
+        byte[] Pack(List<Blast> list, double now)
+        {
+            var ms = new MemoryStream(); var w = new BinaryWriter(ms);
+            w.Write((byte)list.Count);
+            foreach (var b in list)
+            {
+                w.Write(b.g.x); w.Write(b.g.y); w.Write(b.g.z); w.Write(b.kt);
+                w.Write(b.wx); w.Write(b.wz); w.Write(b.tm); w.Write(b.seed);
+                w.Write(now - b.tm);   // age at the host
+            }
+            return ms.ToArray();
+        }
+
+        internal void Unpack(byte[] d, double now)
+        {
+            var r = new BinaryReader(new MemoryStream(d));
+            int n = r.ReadByte();
+            for (int i = 0; i < n; i++)
+            {
+                var g = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()); float kt = r.ReadSingle();
+                double wx = r.ReadDouble(), wz = r.ReadDouble(), tm = r.ReadDouble(); int seed = r.ReadInt32(); double age = r.ReadDouble();
+                if (!On.Value || age > Duration.Value * 60f) continue;
+                var have = Near(g, tm);
+                if (have != null) { have.wx = wx; have.wz = wz; continue; }   // seen here too: take the host's drift anchor
+                var b = New(g, kt, wx, wz, tm, seed, (float)Math.Max(0, age));
+                FastForward(b, (float)age);
+                NOCloudsPlugin.Log.LogInfo($"Nuclear: {kt:F2} kt blast from the host, {age:F0} s ago.");
+            }
+        }
+
+        // a blast that started before we joined: run the cap/ring model up to now (the game's mushroom is not here)
+        void FastForward(Blast b, float age)
+        {
+            const float h = 0.5f;
+            var lvl = NetworkSceneSingleton<LevelInfo>.i;
+            Vector3 wind = lvl != null ? lvl.windVelocity : Vector3.zero; wind.y = 0;
+            b.capG = b.g + wind * age;
+            for (float t = h; t <= age; t += h)
+            {
+                ModelCap(b, t, out Vector3 cG, out float cR);
+                float rise = (cG.y - b.lastCapY) / h; b.lastCapY = cG.y;
+                TryRing(b, t, cG, cR, rise);
+                b.capNow = cG; b.capRNow = cR; b.tNow = t;
+            }
+            b.lastCapT = Time.time;
+        }
+
+        void TryRing(Blast b, float t, Vector3 cG, float cR, float rise)
+        {
+            // a new layer every ~1.2-2 blast radii above the last one, ahead of the rising cap (pileus first)
+            if (b.nRings < 4 && t > 3 && rise > 2f)
+            {
+                float sp = b.bp * (1.2f + 0.8f * (float)b.rng.NextDouble());
+                float hh = cG.y + 2.3f * cR;
+                if ((b.nRings == 0 && hh > b.g.y + 2.5f * b.bp) || (b.nRings > 0 && hh > b.ringH[b.nRings - 1] + sp))
+                {
+                    b.ringH[b.nRings] = hh; b.ringT[b.nRings] = t;
+                    b.ringMax[b.nRings] = RingSize.Value * b.bp * (0.6f + 0.6f * (float)b.rng.NextDouble());
+                    b.nRings++;
+                }
+            }
         }
 
         // model cap: rises to ~Hc above the burst in a couple of minutes and widens
@@ -149,7 +239,7 @@ namespace NoAtmoFX
                 Vector3 f = cam.transform.forward; f.y = 0; f = f.sqrMagnitude > 1e-4f ? f.normalized : Vector3.forward;
                 Vector3 w = cam.transform.position + f * TestDist.Value * 1000f;
                 w.y = Datum.originPosition.y + 500f;
-                Add(w, TestYield.Value, null, wx, wz);
+                Add(w, TestYield.Value, null, wx, wz, true);
                 TestNow = false;
             }
             float life = Duration.Value * 60f;
@@ -172,18 +262,7 @@ namespace NoAtmoFX
                 else ModelCap(b, t, out cG, out cR);
                 float rise = (cG.y - b.lastCapY) / Mathf.Max(Time.time - b.lastCapT, 1e-3f);
                 if (Time.time - b.lastCapT > 0.5f) { b.lastCapY = cG.y; b.lastCapT = Time.time; }
-                // a new layer every ~1.2-2 blast radii above the last one, ahead of the rising cap (pileus first)
-                if (b.nRings < 4 && t > 3 && rise > 2f)
-                {
-                    float sp = b.bp * (1.2f + 0.8f * (float)b.rng.NextDouble());
-                    float h = cG.y + 2.3f * cR;
-                    if ((b.nRings == 0 && h > b.g.y + 2.5f * b.bp) || (b.nRings > 0 && h > b.ringH[b.nRings - 1] + sp))
-                    {
-                        b.ringH[b.nRings] = h; b.ringT[b.nRings] = t;
-                        b.ringMax[b.nRings] = RingSize.Value * b.bp * (0.6f + 0.6f * (float)b.rng.NextDouble());
-                        b.nRings++;
-                    }
-                }
+                TryRing(b, t, cG, cR, rise);
                 b.capNow = cG; b.capRNow = cR; b.tNow = t;
             }
         }

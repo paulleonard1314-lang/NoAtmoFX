@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 (2026-11-04)
+
+- Multiplayer: all players see the same clouds. Cloud drift, evolution and weather smoothing run on the mission clock that the game shares, so players who join late match too. This also works on servers without the mod.
+- When the host runs NoAtmoFX it sends its cloud settings, the exact cloud state and the open nuclear holes to clients with the mod. The client's own settings are restored on leaving. A new *Multiplayer* tab has the options, the sync status and a settings code to compare between players.
+- Nuclear rings now use the same random numbers for every player.
+
 ## 1.0.0 (2026-11-03)
 
 First public release. The mod was called NO Clouds during development; it is now NoAtmoFX. The config file name and settings stay the same.
