@@ -729,6 +729,7 @@ namespace NoAtmoFX
         {
             Perf.SetEnabled(_perfMeter.Value);
             Perf.Tick();
+            BenchTick();
             if (_toggleKey.Value.IsDown()) { _on.Value = !_on.Value; Log.LogInfo("Clouds " + (_on.Value ? "ON" : "OFF")); }
             if (_dumpKey.Value.IsDown()) Dump();
             if (_menuKey.Value.IsDown())
@@ -1204,7 +1205,7 @@ namespace NoAtmoFX
                 GUILayout.Label(T("Cloud settings code: ", "Código das configurações de nuvem: ") + Sync.SettingsCode() + (Sync.UsingHostSettings ? T(" (host's)", " (do host)") : "") +
                     T("  — same code = same clouds when the host has no NoAtmoFX.", "  — mesmo código = mesmas nuvens quando o host não tem NoAtmoFX."));
             }
-            if (_section == "Quality" && _perfMeter.Value) Perf.Draw(T);
+            if (_section == "Quality") { if (_perfMeter.Value) Perf.Draw(T); DrawBench(); }
             if (_section == "Nuclear" && Nukes != null && GUILayout.Button(T("Test blast now (clouds only, ahead of the camera)", "Explosão de teste agora (só nas nuvens, à frente da câmera)"))) Nukes.TestNow = true;
             _scroll = GUILayout.BeginScrollView(_scroll);
             var small = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
@@ -1244,6 +1245,72 @@ namespace NoAtmoFX
             if (GUILayout.Button(T("Diagnostic to log", "Diagnóstico no log"))) Dump();
             GUILayout.EndHorizontal();
             GUI.DragWindow(new Rect(0, 0, 10000, 22));
+        }
+
+        // ---------- benchmark (Quality tab) ----------
+        // The game build gives mods no GPU timers, so the cost of each part is measured by switching parts on and
+        // off for a few seconds each and comparing the frame time. Settings are restored and never saved.
+        struct BenchStep { public string en, pt; public System.Action set; }
+        BenchStep[] _bSteps; int _bIdx = -1; float _bT0; double _bSum; int _bN; float _bWorst; readonly List<float> _bDts = new List<float>();
+        string[] _bRes; bool _bSave;
+        bool _bOn, _bSh, _bRain, _bSlice; float _bRays, _bShafts; int _bEvery, _bDs;
+        const float BenchWarm = 1.5f, BenchLen = 5f;
+
+        void StartBench()
+        {
+            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value;
+            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; }
+            _bSteps = new[]
+            {
+                new BenchStep { en = "Mod off", pt = "Mod desligado", set = () => { Mine(); _on.Value = false; } },
+                new BenchStep { en = "Clouds only (no shadows, rays, shafts, rain curtains)", pt = "Só nuvens (sem sombra, raios, feixes, cortinas)", set = () => { Mine(); _shOn.Value = false; _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
+                new BenchStep { en = "Clouds + shadows", pt = "Nuvens + sombras", set = () => { Mine(); _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
+                new BenchStep { en = "Your settings (1.2)", pt = "Suas configurações (1.2)", set = () => Mine() },
+                new BenchStep { en = "Your settings, old 1.1 way", pt = "Suas configurações, jeito antigo 1.1", set = () => { Mine(); _mapSlicing.Value = false; _shEvery.Value = 1; } },
+                new BenchStep { en = "Your settings, one Downscale step lower", pt = "Suas configurações, Downscale um nível abaixo", set = () => { Mine(); _downscale.Value = Mathf.Min(_bDs + 1, 4); } },
+            };
+            _bRes = new string[_bSteps.Length];
+            _bSave = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            _bIdx = 0; _bSteps[0].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
+            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Steps {_steps.Value}");
+        }
+
+        void StopBench(bool done)
+        {
+            if (_bIdx < 0) return;
+            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs;
+            Config.SaveOnConfigSet = _bSave;
+            _bIdx = -1;
+            if (done) Log.LogInfo("Benchmark results:\n" + string.Join("\n", _bRes));
+        }
+
+        void BenchTick()
+        {
+            if (_bIdx < 0) return;
+            float t = Time.unscaledTime - _bT0;
+            if (t > BenchWarm) { float dt = Time.unscaledDeltaTime * 1000f; _bSum += dt; _bN++; _bDts.Add(dt); }
+            if (t < BenchWarm + BenchLen) return;
+            _bDts.Sort();
+            float avg = _bN > 0 ? (float)(_bSum / _bN) : 0, p99 = _bDts.Count > 0 ? _bDts[Mathf.Min(_bDts.Count - 1, (int)(_bDts.Count * 0.99f))] : 0;
+            var st = _bSteps[_bIdx];
+            _bRes[_bIdx] = $"{T(st.en, st.pt)}: {avg:F1} ms ({(avg > 0 ? 1000f / avg : 0):F0} fps), {T("worst 1%", "pior 1%")} {p99:F1} ms";
+            if (++_bIdx >= _bSteps.Length) { StopBench(true); return; }
+            _bSteps[_bIdx].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
+        }
+
+        void DrawBench()
+        {
+            if (_bIdx >= 0)
+            {
+                GUILayout.Label(T($"Benchmark running ({_bIdx + 1}/{_bSteps.Length}): {_bSteps[_bIdx].en}. Keep the camera still.",
+                                  $"Teste rodando ({_bIdx + 1}/{_bSteps.Length}): {_bSteps[_bIdx].pt}. Deixe a câmera parada."));
+                if (GUILayout.Button(T("Stop", "Parar"))) StopBench(false);
+            }
+            else if (GUILayout.Button(T($"Benchmark: switch parts on/off ({_bSteps?.Length ?? 6} x {BenchWarm + BenchLen:F0} s, camera still; settings are restored)",
+                                        $"Teste de desempenho: liga/desliga cada parte ({_bSteps?.Length ?? 6} x {BenchWarm + BenchLen:F0} s, câmera parada; as configurações voltam)")))
+                StartBench();
+            if (_bRes != null)
+                foreach (var r in _bRes) if (r != null) GUILayout.Label(r);
         }
 
         void Dump()

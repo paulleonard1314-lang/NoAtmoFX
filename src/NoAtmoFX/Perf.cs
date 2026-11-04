@@ -67,17 +67,13 @@ namespace NoAtmoFX
         {
             GUILayout.Label(T($"Frame: {_frame:F1} ms ({(_frame > 0 ? 1000f / _frame : 0):F0} fps), GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}",
                               $"Quadro: {_frame:F1} ms ({(_frame > 0 ? 1000f / _frame : 0):F0} fps), GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}"));
-            bool gpuOk = Time.unscaledTime < _anyGpuT + 3f || _anyGpuT > 1e5f;
+            // per-part GPU timers: only when the build provides them (the release game does not)
+            if (!(Time.unscaledTime < _anyGpuT + 3f || _anyGpuT > 1e5f)) return;
             for (int i = 0; i < Rows.Length; i++)
             {
                 var r = Rows[i];
-                string name = T(r.en, r.pt);
-                string g = gpuOk ? $"GPU {Gpu[i]:F2} ms" + (r.s != Refl ? $" ({T("peak", "pico")} {Peak[i]:F2})" : "") : "GPU n/a";
-                GUILayout.Label($"{name}: {g}, CPU {Cpu[i]:F2} ms");
+                GUILayout.Label($"{T(r.en, r.pt)}: GPU {Gpu[i]:F2} ms" + (r.s != Refl ? $" ({T("peak", "pico")} {Peak[i]:F2})" : ""));
             }
-            if (!gpuOk)
-                GUILayout.Label(T("This game build/graphics API gives no GPU timers to mods. Compare the frame time with the options above on/off instead.",
-                                  "Esta build do jogo/API gráfica não dá timers de GPU pros mods. Compare o tempo de quadro ligando/desligando as opções acima."));
         }
     }
 }
