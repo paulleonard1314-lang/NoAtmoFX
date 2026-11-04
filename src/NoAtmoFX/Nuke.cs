@@ -271,7 +271,7 @@ namespace NoAtmoFX
         public void Apply(Material m, Camera cam, Vector3 gCam, double wx, double wz, float hum)
         {
             int n = (On.Value) ? Mathf.Min(_b.Count, MAX) : 0;
-            m.SetFloat("_NkN", n);
+            m.SetFloat(ID._NkN, n);
             _top = 0;
             if (n == 0) return;
             float life = Duration.Value * 60f;
@@ -305,10 +305,10 @@ namespace NoAtmoFX
                 _L[i] = new Vector4(fp.x, fp.y, fp.z, L);
                 if (L > bestL) { bestL = L; lc = Color.Lerp(new Color(1f, 0.93f, 0.82f), new Color(1f, 0.42f, 0.16f), Mathf.Clamp01(t / (2.5f * tau))); }
             }
-            m.SetVectorArray("_NkP", _P); m.SetVectorArray("_NkS", _S); m.SetVectorArray("_NkC", _C);
-            m.SetVectorArray("_NkRg", _Rg); m.SetVectorArray("_NkL", _L);
-            m.SetVector("_NkLC", lc);
-            m.SetFloat("_NkRing", Rings.Value * (0.45f + 0.35f * hum));
+            m.SetVectorArray(ID._NkP, _P); m.SetVectorArray(ID._NkS, _S); m.SetVectorArray(ID._NkC, _C);
+            m.SetVectorArray(ID._NkRg, _Rg); m.SetVectorArray(ID._NkL, _L);
+            m.SetVector(ID._NkLC, lc);
+            m.SetFloat(ID._NkRing, Rings.Value * (0.45f + 0.35f * hum));
         }
 
         internal bool TestNow;   // button in the F11 menu

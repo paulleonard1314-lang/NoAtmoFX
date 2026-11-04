@@ -299,15 +299,15 @@ namespace NoAtmoFX
         {
             if (RainMat == null || amt < 0.01f) return;
             Vector3 rainW = wind + Vector3.down * 9f;
-            RainMat.SetVector("_RainCam", cam.transform.position);
-            RainMat.SetVector("_RainVelW", rainW);
-            RainMat.SetVector("_RainVelRel", rainW - camVel);
-            RainMat.SetFloat("_RainBox", 60f);
-            RainMat.SetFloat("_RainAmt", Mathf.Clamp01(amt) * 0.55f);
-            RainMat.SetFloat("_RainTime", Time.time % 1000f);
-            RainMat.SetFloat("_RainExp", 1f / 60f);
+            RainMat.SetVector(ID._RainCam, cam.transform.position);
+            RainMat.SetVector(ID._RainVelW, rainW);
+            RainMat.SetVector(ID._RainVelRel, rainW - camVel);
+            RainMat.SetFloat(ID._RainBox, 60f);
+            RainMat.SetFloat(ID._RainAmt, Mathf.Clamp01(amt) * 0.55f);
+            RainMat.SetFloat(ID._RainTime, Time.time % 1000f);
+            RainMat.SetFloat(ID._RainExp, 1f / 60f);
             Color fl = new Color(0.75f, 0.82f, 1f) * (_flash * 0.25f);
-            RainMat.SetColor("_RainCol", light + fl);
+            RainMat.SetColor(ID._RainCol, light + fl);
             cmd.DrawMesh(_rainMesh, Matrix4x4.identity, RainMat, 0, 0);
         }
 
@@ -315,8 +315,8 @@ namespace NoAtmoFX
         internal void Apply(Material m, Camera cam)
         {
             Vector3 rel = _flashW - cam.transform.position;
-            m.SetVector("_FlashP", new Vector4(rel.x, rel.y, rel.z, _flash));
-            m.SetVector("_FlashCol", new Vector4(0.8f, 0.86f, 1f, 1f));
+            m.SetVector(ID._FlashP, new Vector4(rel.x, rel.y, rel.z, _flash));
+            m.SetVector(ID._FlashCol, new Vector4(0.8f, 0.86f, 1f, 1f));
         }
 
         internal void Release()
@@ -330,7 +330,6 @@ namespace NoAtmoFX
     class AtmosPass : ScriptableRenderPass
     {
         readonly NOCloudsPlugin _p;
-        readonly ProfilingSampler _prof = new ProfilingSampler("NOClouds atmosphere");
         internal RenderTexture RaysRT, ShaftRT, ShaftH0, ShaftH1; int _shFrame = -10; Vector3 _shCamFwd;
         public AtmosPass(NOCloudsPlugin p) { _p = p; renderPassEvent = RenderPassEvent.AfterRenderingTransparents; ConfigureInput(ScriptableRenderPassInput.Depth); }
 
@@ -338,7 +337,7 @@ namespace NoAtmoFX
         {
             ref var cd = ref renderingData.cameraData;
             var cmd = CommandBufferPool.Get("NOClouds atmosphere");
-            using (new ProfilingScope(cmd, _prof))
+            using (new ProfilingScope(cmd, Perf.Atmos))
             {
                 var color = cd.renderer.cameraColorTargetHandle;
                 // sun rays: mask (sky x cloud transmittance) blurred towards the sun, added to the screen
@@ -378,8 +377,8 @@ namespace NoAtmoFX
                     float shBlend = fresh ? 1f : Mathf.Clamp01(0.25f + turn / 0.15f);
                     _shFrame = Time.frameCount; _shCamFwd = fwd;
                     var tmp = ShaftH0; ShaftH0 = ShaftH1; ShaftH1 = tmp;      // H1 = previous history, H0 = new
-                    cmd.SetGlobalTexture("_ShHist", ShaftH1);
-                    cmd.SetGlobalFloat("_ShBlend", shBlend);
+                    cmd.SetGlobalTexture(ID._ShHist, ShaftH1);
+                    cmd.SetGlobalFloat(ID._ShBlend, shBlend);
                     cmd.Blit(ShaftRT, ShaftH0, _p.Mat, 15);
                     cmd.Blit(ShaftH0, color, _p.Mat, 13);
                 }
