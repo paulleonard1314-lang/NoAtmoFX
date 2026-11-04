@@ -61,6 +61,8 @@ If performance is a problem, look at the *Quality* tab first:
 - *Downscale*: 1 = full resolution, 2 = half (default), 4 = quarter.
 - *Steps*: fewer steps run faster but show more banding in the distance.
 - Turning off *Shadows > Shadows* and *Atmosphere > LightShafts* gives the biggest gain.
+- *PerformanceMeter* shows how many milliseconds each part of the mod takes, right in the Quality tab. Please include those numbers when reporting a slowdown.
+- *MapSlicing* and *ShadowUpdateEvery* (on by default since 1.2.0) save GPU without changing the look; turn them off only to compare.
 
 ## Nuclear blasts
 
