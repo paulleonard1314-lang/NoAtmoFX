@@ -80,7 +80,7 @@ namespace NoAtmoFX
         internal double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; internal Vector3 _windS; float _windLogT = -100;
         internal float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; internal bool _wxInit; bool _frontInit;
         internal float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; internal int _front;
-        internal NOCSync Sync; internal float EvolveRate => _evolve.Value;
+        internal NOCSync Sync; internal NOCBoscali Boscali; internal float EvolveRate => _evolve.Value;
         readonly Dictionary<Camera, UniversalAdditionalCameraData> _camData = new Dictionary<Camera, UniversalAdditionalCameraData>();
         readonly Vector3[] _corners = new Vector3[4];
 
@@ -429,6 +429,7 @@ namespace NoAtmoFX
             Atmos = new NOCAtmos(this); Atmos.Init(_ab); _apass = new AtmosPass(this);
             Nukes = new NOCNukes(this, C); Nukes.Patch();
             Sync = new NOCSync(this, C);
+            Boscali = new NOCBoscali(C);
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             NoAtmoFXApi.P = this; _onPrev = _on.Value;
             Log.LogInfo("NoAtmoFX " + Version + " loaded (integration API " + NoAtmoFXApi.ApiVersion + ").");
@@ -561,7 +562,7 @@ namespace NoAtmoFX
         internal float FogExtra;
         void OwnFog()
         {
-            if (!_on.Value || _atFog.Value <= 0.001f || _level == null) { _fogWritten = -1; FogExtra = 0; return; }
+            if (!_on.Value || _atFog.Value <= 0.001f || _level == null || (Boscali != null && Boscali.YieldFog)) { _fogWritten = -1; FogExtra = 0; return; }
             var cam = TargetCamera(); if (cam == null) return;
             // the game only rewrites the fog now and then: if the value is still ours, the stored base is valid
             if (Mathf.Abs(RenderSettings.fogDensity - _fogWritten) > 1e-9f)
@@ -702,7 +703,7 @@ namespace NoAtmoFX
         }
 
         // ---------- atmosphere ----------
-        bool NearRainOn() => _atNearRain.Value == 1 || (_atNearRain.Value == 0 && NuclearRain() == null);
+        bool NearRainOn() => _atNearRain.Value == 1 || (_atNearRain.Value == 0 && NuclearRain() == null && !(Boscali != null && Boscali.YieldNearRain));
         internal void DrawNearRain(CommandBuffer cmd, Camera cam)
         {
             if (Atmos == null || !NearRainOn() || _level == null) return;
@@ -750,6 +751,7 @@ namespace NoAtmoFX
                 if (_level != null && F_cloudLayer != null) _cloudLayer = F_cloudLayer.GetValue(_level) as Component;
                 if (_cloudLayer != null && F_ws == null) F_ws = _cloudLayer.GetType().GetField("currentWeatherSet", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
             }
+            Boscali?.Tick();
             Sync?.Tick(Time.deltaTime, _level != null);
             if (_level == null) return;
 
@@ -917,6 +919,7 @@ namespace NoAtmoFX
             if (_condOv.Value >= 0) return "menu";
             if (Sync != null && Sync.HostLive && Sync.HostInputValid && Sync.HostInput.Any) return "host";
             if (NoAtmoFXApi.In.Any) return "api";
+            if (NoAtmoFXApi.Adapter.Any) return "boscali";
             return "mission";
         }
 
@@ -1269,6 +1272,7 @@ namespace NoAtmoFX
             }
             if (Pt) GUILayout.Label($"Tempo: condições {_cond:F2}, hora {_tod:F1} (aquecimento {_heat:F2}), umidade {_H:F2}, instabilidade {_I:F2}, frente {(_front == 1 ? "fria" : _front == 2 ? "quente" : "nenhuma")}, base ref {_effBottom:F0} m, cobertura {_effCoverage:F2}, vento {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s, fonte {WeatherSourceName()}");
             else GUILayout.Label($"Weather: conditions {_cond:F2}, hour {_tod:F1} (heating {_heat:F2}), humidity {_H:F2}, instability {_I:F2}, front {(_front == 1 ? "cold" : _front == 2 ? "warm" : "none")}, base ref {_effBottom:F0} m, coverage {_effCoverage:F2}, wind {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s, source {WeatherSourceName()}");
+            if (Boscali != null && Boscali.Present) GUILayout.Label((Pt ? "Clima Boscali (Unified Effects): " : "Boscali weather (Unified Effects): ") + Boscali.Status);
             if (_section == "Multiplayer" && Sync != null)
             {
                 string st = !Sync.Shared ? T("not in a multiplayer mission", "fora de missão multijogador") : Sync.Status;

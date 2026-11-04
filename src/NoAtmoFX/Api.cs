@@ -96,7 +96,8 @@ namespace NoAtmoFX
         /// <summary>Back to following the mission for everything set through the API. The clouds glide back.</summary>
         public static void ClearWeather() { In = WeatherInput.None; }
 
-        /// <summary>Who drives the weather right now: "mission", "api", "host" (multiplayer, host's input) or "menu" (F11 override).</summary>
+        /// <summary>Who drives the weather right now: "mission", "api", "boscali" (built-in adapter for the Unified Client Effects weather),
+        /// "host" (multiplayer, host's input) or "menu" (F11 override).</summary>
         public static string WeatherSource => P == null ? "none" : P.WeatherSourceName();
 
         // ------------------------------------------------------------------ state (read only, smoothed values the clouds use)
@@ -160,6 +161,10 @@ namespace NoAtmoFX
         /// <summary>Local input from other mods.</summary>
         internal static WeatherInput In = WeatherInput.None;
         /// <summary>Input the clouds use this frame: the host's in multiplayer when it sends one, else the local one.</summary>
-        internal static WeatherInput Effective => P?.Sync != null && P.Sync.HostLive && P.Sync.HostInputValid ? P.Sync.HostInput : In;
+        /// <summary>Input found by a built-in adapter (Boscali weather); used when no mod sets weather through the API.</summary>
+        internal static WeatherInput Adapter = WeatherInput.None;
+        /// <summary>This player's own input: API calls first, else the adapter.</summary>
+        internal static WeatherInput LocalInput => In.Any ? In : Adapter;
+        internal static WeatherInput Effective => P?.Sync != null && P.Sync.HostLive && P.Sync.HostInputValid ? P.Sync.HostInput : LocalInput;
     }
 }

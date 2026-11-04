@@ -45,8 +45,8 @@ day cycle glide to it over Weather > ChangeTime (10 minutes by default, player s
 and speeds up over about 2 minutes. Real clouds never change at once, and NoAtmoFX keeps that rule whatever the
 input. So send your weather whenever it changes (or every few seconds); there is no need to ramp it yourself.
 
-Priority: the player's own F11 override > the host's API input (multiplayer) > local API input > mission.
-`WeatherSource` tells you which one is active (`menu`, `host`, `api`, `mission`).
+Priority: the player's own F11 override > the host's input (multiplayer) > local API input > built-in adapter
+(see below) > mission. `WeatherSource` tells you which one is active (`menu`, `host`, `api`, `boscali`, `mission`).
 
 ## Multiplayer
 
@@ -57,6 +57,36 @@ Priority: the player's own F11 override > the host's API input (multiplayer) > l
   the host (`FollowingHost == true`) the host's input replaces their local one. Calling them on clients too is
   harmless.
 - On/off and feature toggles are per player (display choices), never synced.
+
+## Unified Client Effects (Boscali weather)
+
+NoAtmoFX 1.3.0 has a built-in adapter for the weather of the Unified Client Effects pack
+(`aaron.boscali.weather-unified`). Nothing has to change in the pack for it to work:
+
+- That weather writes `LevelInfo.conditions` capped at 0.6 (except in its extreme storm), because the game's own
+  sky turns into a grey patterned sheet above that. Following `LevelInfo` alone would never show its rain and
+  storms, so the adapter reads the live, uncapped values from its weather manager (`CurrentConditions`,
+  `CurrentCloudHeight`, `CurrentWindVelocity`, `IsEnabled`) twice a second and uses them as weather input.
+  `WeatherSource` reads `boscali` while it does.
+- It only runs while that weather is enabled (its `Weather/Enabled` setting) and not in multiplayer, where that
+  weather is off. In multiplayer NoAtmoFX keeps its own sync (mission clock + host).
+- If the pack calls the API itself (for example `SetWeather` from its smoothing step), the API input wins and the
+  adapter steps back. That is the more robust route: the adapter depends on member names that may change.
+- Player settings: *Integration > FollowBoscaliWeather* (on) and *Integration > YieldToBoscali* (on).
+
+Effects both mods have, and what happens by default when both are on:
+
+| Pack setting (`Weather/...`) | NoAtmoFX feature | Default |
+|---|---|---|
+| `RainAtmosphereEnabled` (fog, ambient) | `Fog` | NoAtmoFX steps aside (both write `RenderSettings.fog*` every frame and would fight). |
+| `RainVisualsEnabled` (falling rain) | `NearRain` | NoAtmoFX steps aside. Its rain curtains under storms (`RainShafts`) stay, they are seen from afar. |
+| `CanopyRainEnabled` / `CanopyShaderEnabled` | `WetGlass` | Both run: pick one in the menu with `SetFeature("WetGlass", ...)`. |
+| `LightningEnabled` | `Lightning` | Both run: pick one. NoAtmoFX strikes come from its own cumulonimbus. |
+| `SunShaftsEnabled` | `GodRays`, `LightShafts` | Both run: pick one. |
+
+Possible next step (not in 1.3.0): sample the pack's weather field on a coarse grid around the camera so the cloud
+field follows its fronts and storm cells place by place, not only the conditions at the player. That needs a shader
+change in NoAtmoFX and a stable way to read the field (an `IWeatherView`-style sampling call).
 
 ## Menu: switch and features
 

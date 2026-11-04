@@ -132,7 +132,7 @@ namespace NoAtmoFX
                     if (_lastCfgSent != null && cfg != _lastCfgSent) foreach (var pl in _modPlayers) SendSettings(pl, cfg);
                     _lastCfgSent = cfg;
                     // weather input from other mods changed: send the state now, not in up to 10 s
-                    var ms = new MemoryStream(); NoAtmoFXApi.In.Write(new BinaryWriter(ms)); var cur = ms.ToArray();
+                    var ms = new MemoryStream(); NoAtmoFXApi.LocalInput.Write(new BinaryWriter(ms)); var cur = ms.ToArray();
                     if (_lastInputSent != null && !Same(cur, _lastInputSent)) { _stateT = Time.time; foreach (var pl in _modPlayers) SendState(pl, false); }
                     _lastInputSent = cur;
                 }
@@ -294,7 +294,7 @@ namespace NoAtmoFX
             w.Write(_p._windS.x); w.Write(_p._windS.z);
             w.Write(_p._condS); w.Write(_p._baseS); w.Write(_p._heatS); w.Write(_p._Hs); w.Write(_p._Is); w.Write(_p._frontAmt); w.Write(_p._front);
             // appended in 1.3.0 (older clients stop reading before it): the host's integration-API weather input
-            w.Write((byte)1); NoAtmoFXApi.In.Write(w);
+            w.Write((byte)1); NoAtmoFXApi.LocalInput.Write(w);
             pl.Send(new NoAtmoFXMsg { kind = STATE, data = ms.ToArray() });
             if (full && _p.Nukes != null) pl.Send(new NoAtmoFXMsg { kind = NUKE, data = _p.Nukes.Pack(T, true) });
         }

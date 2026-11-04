@@ -8,7 +8,8 @@ Integration API for other mods (effects packs, weather systems). See [INTEGRATIO
 - Weather from the API is a target: the clouds still glide to it over *Weather > ChangeTime*, never at once.
 - Multiplayer: the host's API weather is sent to clients with NoAtmoFX and replaces theirs (host is the authority).
 - `api/NoAtmoFXBridge.cs`: drop-in file to call NoAtmoFX without referencing its DLL.
-- The F11 weather line shows the weather source (mission, api, host, menu).
+- Built-in adapter for the Unified Client Effects (Boscali) weather: the clouds follow its live, uncapped weather in single player, and our fog and near-camera rain step aside when its matching effects are on (*Integration* section).
+- The F11 weather line shows the weather source (mission, api, boscali, host, menu).
 
 ## 1.2.0 (2026-11-04)
 
