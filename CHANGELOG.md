@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 (unreleased)
+
+Integration API for other mods (effects packs, weather systems). See [INTEGRATION.md](INTEGRATION.md). Only the plugin DLL changes; without another mod nothing behaves differently.
+
+- `NoAtmoFX.NoAtmoFXApi`: switch the clouds and single effects on/off, feed weather (conditions, cloud base, wind, humidity, instability, cover, front, day cycle, lightning), read the cloud state, and listen to lightning, nuclear blasts and on/off changes.
+- Weather from the API is a target: the clouds still glide to it over *Weather > ChangeTime*, never at once.
+- Multiplayer: the host's API weather is sent to clients with NoAtmoFX and replaces theirs (host is the authority).
+- `api/NoAtmoFXBridge.cs`: drop-in file to call NoAtmoFX without referencing its DLL.
+- The F11 weather line shows the weather source (mission, api, host, menu).
+
 ## 1.2.0 (2026-11-04)
 
 Faster, same look. Only the plugin DLL changes (the rain fix from 1.0.1 still needs a new shader bundle if you have not built it yet).

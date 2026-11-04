@@ -133,6 +133,7 @@ namespace NoAtmoFX
             int seed = Mathf.RoundToInt(g0.x / 250f) * 73856093 ^ Mathf.RoundToInt(g0.z / 250f) * 19349663 ^ Mathf.RoundToInt(kt * 10f);
             var b = New(g0, kt, wx, wz, tm, seed, 0f);
             b.cap = cap;
+            NoAtmoFXApi.RaiseNuke(g0 + Datum.originPosition, kt);
             if (mp && sy.IsHost && (src != null || test)) sy.HostBlast(Pack(new List<Blast> { b }, sy.T));
             NOCloudsPlugin.Log.LogInfo($"Nuclear: {kt:F2} kt at altitude {b.g.y:F0} m, blast radius {b.bp:F0} m, hole {b.bp * HoleSize.Value / 1000:F1} km, mushroom cap {(cap != null ? "found" : "model")}.");
         }
