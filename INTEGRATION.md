@@ -102,6 +102,27 @@ Feature names: `Clouds`, `Shadows`, `RainShafts`, `NearRain`, `Lightning`, `Turb
 non-zero value when switched back on. `persist: true` (default) writes the player's NoAtmoFX config, like the
 F11 menu; use `false` for temporary changes. Switching is immediate.
 
+### From a config-driven panel
+
+A control panel that edits other plugins' BepInEx `ConfigFile` entries by GUID can show NoAtmoFX with no code at all:
+NoAtmoFX reads its settings every frame, so a changed value applies at once. GUID `paul.no.clouds`:
+
+| Section / key | Type | Meaning |
+|---|---|---|
+| `General` / `Enabled` | bool | Volumetric clouds on/off (game clouds when off). |
+| `Shadows` / `Shadows` | bool | Cloud shadows. |
+| `Atmosphere` / `RainShafts` | bool | Rain curtains under storms. |
+| `Atmosphere` / `NearRain` | int 0..2 | Rain near the camera: 0 auto, 1 always, 2 never. |
+| `Atmosphere` / `Lightning` | float 0..3 | Lightning (0 off). |
+| `Atmosphere` / `Turbulence` | float 0..3 | Turbulence in clouds (0 off). |
+| `Atmosphere` / `GodRays` | float 0..1.5 | Screen sun rays (0 off). |
+| `Atmosphere` / `LightShafts` | float 0..2 | Light shafts below clouds (0 off). |
+| `Atmosphere` / `Fog` | float 0..3 | NoAtmoFX fog (0 = the game's). |
+| `Glass` / `WetGlass` | bool | Drops and frost on the canopy. |
+| `Nuclear` / `Enabled` | bool | Nuclear blasts push the clouds. |
+| `Integration` / `FollowBoscaliWeather` | bool | Clouds follow the Boscali weather. |
+| `Weather` / `ChangeTime` | float 1..30 | Minutes the clouds take to follow a weather change. |
+
 ## State and events
 
 Read-only: `IsEnabled`, `Conditions`, `CloudBase`, `CloudTop`, `Coverage`, `Humidity`, `Instability`, `Front`,
