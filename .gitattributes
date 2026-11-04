@@ -1,0 +1,4 @@
+*.bytes binary
+*.cs text eol=lf
+*.shader text eol=lf
+*.md text eol=lf
