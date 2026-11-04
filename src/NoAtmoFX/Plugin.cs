@@ -18,7 +18,7 @@ namespace NoAtmoFX
     [BepInPlugin("paul.no.clouds", "NoAtmoFX", Version)]   // GUID kept from NO Clouds so existing settings carry over
     public class NOCloudsPlugin : BaseUnityPlugin
     {
-        public const string Version = "1.0.1";
+        public const string Version = "1.1.0";
         internal static ManualLogSource Log;
 
         // General
@@ -76,9 +76,10 @@ namespace NoAtmoFX
         Component _cloudLayer;
         object _weatherSet;
         readonly List<Renderer> _hidden = new List<Renderer>();
-        double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; Vector3 _windS; float _windLogT = -100;
-        float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; bool _wxInit, _frontInit;
-        float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; int _front;
+        internal double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; internal Vector3 _windS; float _windLogT = -100;
+        internal float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; internal bool _wxInit; bool _frontInit;
+        float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; internal int _front;
+        internal NOCSync Sync; internal float EvolveRate => _evolve.Value;
         readonly Dictionary<Camera, UniversalAdditionalCameraData> _camData = new Dictionary<Camera, UniversalAdditionalCameraData>();
         readonly Vector3[] _corners = new Vector3[4];
 
@@ -88,6 +89,8 @@ namespace NoAtmoFX
         // ---------- language: config is in English, the menu can also be shown in Portuguese ----------
         static readonly Dictionary<string, string> PtDesc = new Dictionary<string, string>
         {
+            { "Multiplayer/SyncClouds", "No multijogador as nuvens seguem o relógio da missão que o jogo compartilha, então todos os jogadores veem as mesmas nuvens (também em servidores sem mods). Desligado = comportamento antigo (cada um com a sua deriva)." },
+            { "Multiplayer/FollowHostSettings", "Quando o host também usa o NoAtmoFX: usar as configurações de nuvem do host (Weather, Layer, Shape, Scale, Variation, Wind, Storm, Nuclear) enquanto estiver no jogo dele, pra nuvem ficar idêntica. As suas voltam quando você sai. Luz, qualidade, vidro e atmosfera continuam as suas." },
             { "Nuclear/Enabled", "Explosões nucleares empurram as nuvens: abre um buraco atrás da onda de choque, a nuvem se acumula na borda e anéis de condensação se formam em volta do cogumelo." },
             { "Nuclear/HoleSize", "Tamanho do buraco que a explosão abre nas nuvens, em raios de explosão ((kg de TNT)^(1/3) m: 1 Mt = 1 km). 7 = 7 km para 1 Mt." },
             { "Nuclear/WilsonCloud", "Casca de condensação atrás da onda de choque nos primeiros segundos (mais forte em ar úmido). 0 = desliga." },
@@ -236,7 +239,8 @@ namespace NoAtmoFX
             { "Shadows", "Sombra" },
             { "Glass", "Vidro" },
             { "Atmosphere", "Atmosfera" },
-            { "Nuclear", "Nuclear" }
+            { "Nuclear", "Nuclear" },
+            { "Multiplayer", "Multijogador" }
         };
         bool Pt => _lang.Value == 2 || (_lang.Value == 0 && Application.systemLanguage == SystemLanguage.Portuguese);
         string T(string en, string pt) => Pt ? pt : en;
@@ -417,6 +421,7 @@ namespace NoAtmoFX
             _spass = new ShadowPass(this);
             Atmos = new NOCAtmos(this); Atmos.Init(_ab); _apass = new AtmosPass(this);
             Nukes = new NOCNukes(this, C); Nukes.Patch();
+            Sync = new NOCSync(this, C);
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             Log.LogInfo("NoAtmoFX " + Version + " loaded.");
         }
@@ -721,7 +726,7 @@ namespace NoAtmoFX
             {
                 _menu = !_menu;
                 if (_menu) { _prevLock = Cursor.lockState; _prevVis = Cursor.visible; Cursor.lockState = CursorLockMode.None; Cursor.visible = true; }
-                else { Cursor.lockState = _prevLock; Cursor.visible = _prevVis; Config.Save(); }
+                else { Cursor.lockState = _prevLock; Cursor.visible = _prevVis; SaveConfig(); }
             }
             if (_menu) { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; }
 
@@ -733,6 +738,7 @@ namespace NoAtmoFX
                 if (_level != null && F_cloudLayer != null) _cloudLayer = F_cloudLayer.GetValue(_level) as Component;
                 if (_cloudLayer != null && F_ws == null) F_ws = _cloudLayer.GetType().GetField("currentWeatherSet", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
             }
+            Sync?.Tick(Time.deltaTime, _level != null);
             if (_level == null) return;
 
             SetGameCloudsHidden(_on.Value && _hideGame.Value);
@@ -740,7 +746,13 @@ namespace NoAtmoFX
 
             // weather
             float dt = Time.deltaTime;
-            _evolveT += _evolve.Value * dt;
+            // multiplayer: drift and evolution run on the mission clock shared by the game, so every player
+            // (also one who joins late) has the same clouds; the F11 menu does not snap the weather there
+            bool mp = Sync != null && Sync.Shared;
+            float dts = mp ? (float)Sync.DT : dt;
+            bool snapMenu = _menu && !mp;
+            bool reanchor = mp && (!_wxInit || Sync.Jumped);   // start of the mission clock: drift as if this wind blew since then
+            if (reanchor) _evolveT = _evolve.Value * Sync.T; else _evolveT += _evolve.Value * dts;
             if (Wet != null)
             {
                 Wet.DropSize = _wgSize.Value; Wet.Airflow = _wgAir.Value;
@@ -770,18 +782,23 @@ namespace NoAtmoFX
                 Vector3 wv = _level.windVelocity * _windMul.Value; wv.y = 0;
                 if (wv.magnitude > _maxCloudSpeed.Value) wv = wv.normalized * _maxCloudSpeed.Value;
                 float kw = 1f - Mathf.Exp(-dt / 120f);   // drift changes heading/speed over ~2 min
-                if (!_wxInit || _menu) _windS = wv; else _windS += (wv - _windS) * kw;
-                float dtw = Mathf.Min(dt, 0.1f);
-                _windX += _windS.x * dtw;
-                _windZ += _windS.z * dtw;
+                if (mp) kw = 1f - Mathf.Exp(-dts / 120f);
+                if (!_wxInit || snapMenu) _windS = wv; else _windS += (wv - _windS) * kw;
+                if (reanchor) { _windX = _windS.x * Sync.T; _windZ = _windS.z * Sync.T; }   // as if this wind blew since the start
+                else
+                {
+                    float dtw = mp ? dts : Mathf.Min(dt, 0.1f);
+                    _windX += _windS.x * dtw;
+                    _windZ += _windS.z * dtw;
+                }
                 if (Time.time - _windLogT > 30f && _level.windVelocity.magnitude * _windMul.Value > _maxCloudSpeed.Value)
                 { _windLogT = Time.time; Log.LogInfo($"Wind: game {_level.windVelocity.magnitude:F1} m/s, clouds capped at {_maxCloudSpeed.Value:F0} m/s."); }
             }
             else
             {
                 _effBottom = _manualBase.Value;
-                _windX += 0.94 * _windSpeed.Value * dt;
-                _windZ += 0.34 * _windSpeed.Value * dt;
+                if (reanchor) { _windX = 0.94 * _windSpeed.Value * Sync.T; _windZ = 0.34 * _windSpeed.Value * Sync.T; }
+                else { _windX += 0.94 * _windSpeed.Value * dts; _windZ += 0.34 * _windSpeed.Value * dts; }
             }
             _effBottom = Mathf.Max(0, _effBottom);
             Nukes?.Step(dt, _level, TargetCamera(), _windX, _windZ);
@@ -789,8 +806,8 @@ namespace NoAtmoFX
             // change time: everything that changes the cloud field follows the weather slowly
             float Tc = Mathf.Max(12f, _changeMin.Value * 12f);   // two smoothing stages in series: ~95% at ChangeTime
             float condRaw = _condOv.Value >= 0 ? _condOv.Value : _level.conditions;
-            if (!_wxInit || _menu) { _condS = condRaw; _baseS = _effBottom; }
-            else { float k0 = 1f - Mathf.Exp(-dt / Tc); _condS += (condRaw - _condS) * k0; _baseS += (_effBottom - _baseS) * k0; }
+            if (!_wxInit || snapMenu) { _condS = condRaw; _baseS = _effBottom; }
+            else { float k0 = 1f - Mathf.Exp(-dts / Tc); _condS += (condRaw - _condS) * k0; _baseS += (_effBottom - _baseS) * k0; }
             _effBottom = _baseS;
 
             // ---- weather model: mission weather + time of day -> humidity (H) and instability (I) ----
@@ -800,11 +817,11 @@ namespace NoAtmoFX
             _H = 0.35f + 0.6f * _cond + _humBias.Value;
             if (gameCov >= 0 && _condOv.Value < 0) _H += (gameCov - 0.5f) * 0.1f;   // the game's weather set pulls it a little
             // weather changes slowly (game weather set, front, time of day): ChangeTime
-            if (_wxInit && !_menu) _heat = _heatS += (heatRaw - _heatS) * (1f - Mathf.Exp(-dt / Tc)); else _heat = _heatS = heatRaw;
+            if (_wxInit && !snapMenu) _heat = _heatS += (heatRaw - _heatS) * (1f - Mathf.Exp(-dts / Tc)); else _heat = _heatS = heatRaw;
             _I = (0.15f + 0.75f * _cond) * (0.3f + 0.7f * _heat) + _insBias.Value;
-            if (_wxInit) { float k = 1f - Mathf.Exp(-dt / Tc); _Hs += (_H - _Hs) * k; _Is += (_I - _Is) * k; }
+            if (_wxInit) { float k = 1f - Mathf.Exp(-dts / Tc); _Hs += (_H - _Hs) * k; _Is += (_I - _Is) * k; }
             else { _Hs = _H; _Is = _I; _wxInit = true; }
-            if (_menu) { _Hs = _H; _Is = _I; }   // in the menu, tuning applies immediately
+            if (snapMenu) { _Hs = _H; _Is = _I; }   // in the menu, tuning applies immediately
             _H = _Hs; _I = _Is;
             _ci = Mathf.Lerp(0.15f, 0.6f, _cond) * _cirrusAmt.Value;
             int fm = _frontMode.Value;
@@ -815,12 +832,14 @@ namespace NoAtmoFX
                 ft = _front;
                 if (_cond >= 0.63f) ft = 1; else if (_cond >= 0.43f && _cond <= 0.57f) ft = 2; else if (_cond <= 0.37f) ft = 0;
             }
-            if (_menu || !_frontInit) { _front = ft; _frontAmt = ft == 0 ? 0 : 1; _frontInit = true; }
-            else if (ft != _front) { _frontAmt -= dt / (Tc * 1.5f); if (_frontAmt <= 0) { _frontAmt = 0; _front = ft; } }
-            else if (_front != 0) _frontAmt = Mathf.Min(1, _frontAmt + dt / (Tc * 3f));
+            if (snapMenu || !_frontInit) { _front = ft; _frontAmt = ft == 0 ? 0 : 1; _frontInit = true; }
+            else if (ft != _front) { _frontAmt -= dts / (Tc * 1.5f); if (_frontAmt <= 0) { _frontAmt = 0; _front = ft; } }
+            else if (_front != 0) _frontAmt = Mathf.Min(1, _frontAmt + dts / (Tc * 3f));
             _effCoverage = Mathf.Clamp01((_H - 0.3f) / 0.5f) * 0.85f * _coverage.Value;
             _effTop = _effBottom + 250 + Mathf.Pow(Mathf.Clamp01(_I), 1.6f) * 4500;
         }
+
+        void SaveConfig() { if (Sync != null) Sync.BeforeSave(Config.Save); else Config.Save(); }
 
         void SetGameCloudsHidden(bool hide)
         {
@@ -1108,7 +1127,7 @@ namespace NoAtmoFX
 
         void DrawWin(int id)
         {
-            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Nuclear", "Quality" } })
+            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Nuclear", "Quality", "Multiplayer" } })
             {
                 GUILayout.BeginHorizontal();
                 foreach (var s in row)
@@ -1117,6 +1136,14 @@ namespace NoAtmoFX
             }
             if (Pt) GUILayout.Label($"Tempo: condições {_cond:F2}, hora {_tod:F1} (aquecimento {_heat:F2}), umidade {_H:F2}, instabilidade {_I:F2}, frente {(_front == 1 ? "fria" : _front == 2 ? "quente" : "nenhuma")}, base ref {_effBottom:F0} m, cobertura {_effCoverage:F2}, vento {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
             else GUILayout.Label($"Weather: conditions {_cond:F2}, hour {_tod:F1} (heating {_heat:F2}), humidity {_H:F2}, instability {_I:F2}, front {(_front == 1 ? "cold" : _front == 2 ? "warm" : "none")}, base ref {_effBottom:F0} m, coverage {_effCoverage:F2}, wind {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
+            if (_section == "Multiplayer" && Sync != null)
+            {
+                string st = !Sync.Shared ? T("not in a multiplayer mission", "fora de missão multijogador") : Sync.Status;
+                if (Pt && Sync.Shared) st = Sync.IsHost ? st.Replace("client(s) with NoAtmoFX", "cliente(s) com NoAtmoFX") : Sync.HostHasMod ? "seguindo o host (NoAtmoFX)" : "relógio da missão (host sem NoAtmoFX ou ainda não respondeu)";
+                GUILayout.Label(T("Sync: ", "Sincronia: ") + st + (Sync.Shared ? $", {T("mission time", "tempo da missão")} {Sync.T:F0} s" : ""));
+                GUILayout.Label(T("Cloud settings code: ", "Código das configurações de nuvem: ") + Sync.SettingsCode() + (Sync.UsingHostSettings ? T(" (host's)", " (do host)") : "") +
+                    T("  — same code = same clouds when the host has no NoAtmoFX.", "  — mesmo código = mesmas nuvens quando o host não tem NoAtmoFX."));
+            }
             if (_section == "Nuclear" && Nukes != null && GUILayout.Button(T("Test blast now (clouds only, ahead of the camera)", "Explosão de teste agora (só nas nuvens, à frente da câmera)"))) Nukes.TestNow = true;
             _scroll = GUILayout.BeginScrollView(_scroll);
             var small = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
@@ -1152,7 +1179,7 @@ namespace NoAtmoFX
             if (GUILayout.Button(T("Reset this tab", "Padrão desta aba")))
                 foreach (var kv in Config)
                     if (kv.Key.Section == _section && !(kv.Value is ConfigEntry<KeyboardShortcut>)) kv.Value.BoxedValue = kv.Value.DefaultValue;
-            if (GUILayout.Button(T("Save", "Salvar"))) Config.Save();
+            if (GUILayout.Button(T("Save", "Salvar"))) SaveConfig();
             if (GUILayout.Button(T("Diagnostic to log", "Diagnóstico no log"))) Dump();
             GUILayout.EndHorizontal();
             GUI.DragWindow(new Rect(0, 0, 10000, 22));
