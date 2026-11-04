@@ -40,14 +40,18 @@ Shader "Hidden/NOClouds/Rain"
                 float sp = length(_RainVelRel);
                 float3 ax = sp > 0.01 ? _RainVelRel / sp : float3(0, -1, 0);
                 // streak = distance travelled during the exposure (minimum 0.25 m), thin
-                float len = clamp(sp * _RainExp, 0.25, 6);
+                float d = length(rel);
+                // never longer than half the distance to the eye: a drop right at the camera stretched to 6 m
+                // covered the whole screen (invisible, but every pixel was shaded again = big frame drops)
+                float len = clamp(sp * _RainExp, 0.1, min(6, d * 0.5));
                 float3 vd = normalize(c - _WorldSpaceCameraPos);
                 float3 sd = normalize(cross(ax, vd) + 1e-5);
                 float w = 0.006 + 0.0012 * length(rel);
                 float3 p = c + ax * (v.uv.y - 0.5) * len + sd * (v.uv.x - 0.5) * w;
                 o.pos = mul(UNITY_MATRIX_VP, float4(p, 1));
+                // drops too close to see (alpha 0 below 1.5 m) or past the fade are collapsed, nothing is drawn
+                if (d < 1.5 || d > B * 0.5 || _RainAmt <= 0) o.pos = float4(0, 0, -2, 1);
                 o.uv = v.uv;
-                float d = length(rel);
                 o.a = _RainAmt * saturate(d / 1.5) * saturate(1 - d / (B * 0.5)) * (0.5 + 0.5 * frac(s.x * 17.3)) * saturate(0.35 / max(len, 0.25) + 0.25);
                 return o;
             }
