@@ -32,7 +32,7 @@ namespace NoAtmoFX
         ConfigEntry<bool> _wgOn; ConfigEntry<float> _wgInt, _wgFreeze, _wgRainTau, _wgFrostReach, _wgFrostWhite, _wgRefract; ConfigEntry<int> _wgTest, _wgRainSrc; ConfigEntry<float> _wgSize, _wgAir;
         internal NOCWetGlass Wet; WetGlassPass _gpass; AssetBundle _ab;
         internal NOCNukes Nukes; internal NOCAtmos Atmos; AtmosPass _apass; internal bool RaysActive, ShaftsActive; internal int DownscaleNow = 2; internal RenderTexture CbRT, ReflCloudRT; internal Vector2 GDLast;
-        internal float ProbeCloudAt; internal bool ProbeAtValid;
+        internal float ProbeCloudAt, ProbeTauAt; internal bool ProbeAtValid;
         ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
         internal RenderTexture ProbeRT;
         // Layer
@@ -698,15 +698,17 @@ namespace NoAtmoFX
         internal void DrawNearRain(CommandBuffer cmd, Camera cam)
         {
             if (Atmos == null || !NearRainOn() || _level == null) return;
-            float amt = Atmos.RainHere;
+            // only under an actual cloud: the rain field leans with the wind, so without this drops could fall
+            // out of a clear sky a few km downwind of a shower
+            float amt = Atmos.RainHere * (ProbeAtValid ? Mathf.Clamp01((ProbeTauAt - 1.5f) / 4f) : 0f);
             if (amt < 0.01f) return;
             var csm = SceneSingleton<CameraStateManager>.i;
             Vector3 camVel = csm != null ? csm.cameraVelocity : Vector3.zero;
             Color amb = RenderSettings.ambientSkyColor * RenderSettings.ambientIntensity;
             Light sun = _level.sun;
             Color sc = sun != null && sun.isActiveAndEnabled ? sun.color * sun.intensity : Color.black;
-            // rain is darker than cloud (water in shadow, against a bright background)
-            Color lc = amb * 0.42f + sc * 0.02f; lc.a = 1;
+            // drops are dark, like the base of a rain cloud (they used to be bright and showed up as white dots)
+            Color lc = amb * 0.16f + sc * 0.005f; lc.a = 1;
             Atmos.DrawRain(cmd, cam, amt, camVel, _level.windVelocity, lc);
         }
         void FixedUpdate()
@@ -1277,7 +1279,7 @@ namespace NoAtmoFX
                         var d = r.GetData<Color>();
                         var v = d[0];
                         if (w0 != null) { w0.ProbeCloud = v.r; w0.ProbeTau = v.g; w0.ProbeCb = v.b; w0.ProbeAlt = v.a; w0.ProbeValid = true; }
-                        pl.ProbeCloudAt = v.r; pl.ProbeAtValid = true;
+                        pl.ProbeCloudAt = v.r; pl.ProbeTauAt = v.g; pl.ProbeAtValid = true;
                         if (at != null && d.Length > 1) { at.ProbeRain = d[1].r; at.ProbeCb = d[1].g; at.ProbeRainValid = true; }
                     });
                 }
