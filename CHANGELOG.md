@@ -2,7 +2,7 @@
 
 ## 1.2.0 (2026-11-04)
 
-Faster, same look. Only the plugin DLL changes; the shader bundle from 1.1.0 still works.
+Faster, same look. Only the plugin DLL changes (the rain fix from 1.0.1 still needs a new shader bundle if you have not built it yet).
 
 - Sea reflection: the clouds drawn into the map's reflection probe (refreshed by the game every 5 s) now reuse the camera's weather maps. Before, each of the 6 probe faces rebuilt all of them, and the camera rebuilt them again afterwards, which could cause a hitch every 5 seconds.
 - Weather maps stay fixed in cloud space and are refreshed one map per frame; all of them are rebuilt only when the camera has moved about 1 km (*Quality > MapSlicing*).
@@ -15,6 +15,11 @@ Faster, same look. Only the plugin DLL changes; the shader bundle from 1.1.0 sti
 - Multiplayer: all players see the same clouds. Cloud drift, evolution and weather smoothing run on the mission clock that the game shares, so players who join late match too. This also works on servers without the mod.
 - When the host runs NoAtmoFX it sends its cloud settings, the exact cloud state and the open nuclear holes to clients with the mod. The client's own settings are restored on leaving. A new *Multiplayer* tab has the options, the sync status and a settings code to compare between players.
 - Nuclear rings now use the same random numbers for every player.
+
+## 1.0.1 (2026-11-04)
+
+- Rain near the camera no longer shows up as bright white dots in clear sky. Drops are now dark, like the base of a rain cloud, and only fall when there is cloud overhead.
+- Fixed a big frame drop when looking along the direction of travel in rain: drops right next to the camera were stretched over the whole screen.
 
 ## 1.0.0 (2026-11-03)
 
