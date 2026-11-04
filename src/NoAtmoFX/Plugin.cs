@@ -38,7 +38,7 @@ namespace NoAtmoFX
         // Layer
         ConfigEntry<float> _baseOffset, _manualBase, _planetR;
         // Shape
-        ConfigEntry<float> _coverage, _density, _erosion, _topDensity, _dome, _billow, _soft, _shear;
+        ConfigEntry<float> _coverage, _density, _erosion, _topDensity, _dome, _billow, _soft, _shear, _baseRough;
         // Scale
         ConfigEntry<float> _perC, _perCell, _perS, _perD, _windMul, _windSpeed;
         ConfigEntry<float> _blur, _farSoft, _shDark; ConfigEntry<float> _warp, _perWarp, _turb, _perTurb, _sizeMix, _stretch, _veer, _evolve;
@@ -143,6 +143,7 @@ namespace NoAtmoFX
             { "Wind/WindVeer", "Quanto a direção do cisalhamento gira até 8 km de altura (rad)." },
             { "Wind/Evolution", "Velocidade com que as bolhas 'fervem'/mudam de forma (m/s). 0 = nuvens só deslizam." },
             { "Weather/ConditionsOverride", "Tempo: -1 = o da missão; 0 = céu de bom tempo ... 1 = tempestade." },
+            { "Shape/BaseRoughness", "Parte de baixo dos cúmulos: 0 = todas cortadas retas na base da camada; mais alto = cada nuvem um pouco acima (até ~180 m), fundo subindo para as bordas e mais macio." },
             { "Weather/ChangeTime", "Minutos que as nuvens levam para acompanhar uma mudança de tempo (condições, base, frente, ciclo do dia). Nuvem de verdade nunca muda de uma vez." },
             { "Weather/TimeOfDayOverride", "Hora usada pelo ciclo do dia: -1 = a da missão." },
             { "Weather/DiurnalCycle", "Ciclo do dia: o sol aquece o chão, os cúmulos crescem à tarde e somem à noite." },
@@ -310,6 +311,7 @@ namespace NoAtmoFX
             _density = C.Bind("Shape", "Density", 0.05f, new ConfigDescription("Extinction per metre inside the cloud.", R(0.002f, 0.2f)));
             _dome = C.Bind("Shape", "Dome", 0.45f, new ConfigDescription("How much the cloud narrows with height (higher = rounder, lower domes; lower = towers).", R(0, 1.5f)));
             _billow = C.Bind("Shape", "Billow", 0.45f, new ConfigDescription("Cauliflower billows on the cloud surface.", R(0, 1.5f)));
+            _baseRough = C.Bind("Shape", "BaseRoughness", 0.5f, new ConfigDescription("Cumulus undersides: 0 = every cloud cut flat at the layer base; higher = each cloud a little higher (up to ~180 m), bottoms curving up toward the edges and softer.", R(0, 1)));
             _soft = C.Bind("Shape", "Softness", 0.14f, new ConfigDescription("Cloud edge (lower = sharper outline).", R(0.01f, 0.4f)));
             _erosion = C.Bind("Shape", "DetailErosion", 0.35f, new ConfigDescription("How much the fine noise eats from the edges (wisps at the base, cauliflower at the top).", R(0, 1)));
             _topDensity = C.Bind("Shape", "TopDensity", 1f, new ConfigDescription("Density at the top relative to the base.", R(0.3f, 4)));
@@ -1105,7 +1107,7 @@ namespace NoAtmoFX
             m.SetFloat(ID._PerHum, _perHum.Value); m.SetFloat(ID._PerIns, _perIns.Value); m.SetFloat(ID._PerWarp, _perWarp.Value);
             m.SetFloat(ID._PerTurb, _perTurb.Value); m.SetFloat(ID._PerCb, _perCb.Value);
             m.SetFloat(ID._Warp, _warp.Value); m.SetFloat(ID._Turb, _turb.Value); m.SetFloat(ID._Stretch, _stretch.Value);
-            m.SetFloat(ID._SizeMix, _sizeMix.Value); m.SetFloat(ID._Anvil, _anvil.Value);
+            m.SetFloat(ID._SizeMix, _sizeMix.Value); m.SetFloat(ID._BaseRough, _baseRough.Value); m.SetFloat(ID._Anvil, _anvil.Value);
             m.SetFloat(ID._AnvilShift, _anvilShift.Value); m.SetFloat(ID._Veer, _veer.Value);
             m.SetFloat(ID._Hum, _H); m.SetFloat(ID._Ins, _I);
             m.SetFloat(ID._BaseRef, _effBottom); m.SetFloat(ID._BaseVar, _baseVar.Value);

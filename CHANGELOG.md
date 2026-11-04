@@ -10,6 +10,8 @@ Integration API for other mods (effects packs, weather systems). See [INTEGRATIO
 - `api/NoAtmoFXBridge.cs`: drop-in file to call NoAtmoFX without referencing its DLL.
 - Built-in adapter for the Unified Client Effects (Boscali) weather: the clouds follow its live, uncapped weather in single player, and our fog and near-camera rain step aside when its matching effects are on (*Integration* section).
 - The F11 weather line shows the weather source (mission, api, boscali, host, menu).
+- Cumulus undersides are no longer cut flat at the layer base: each cloud sits a little higher, its bottom curves up toward the edges and is softer (*Shape > BaseRoughness*, 0 = old look). Needs the new shader bundle.
+- DOORMAN preview and GitHub update check embedded in the DLL. Releases are tagged `vX.Y.Z` with the asset `NoAtmoFX_vX.Y.Z.zip`.
 
 ## 1.2.0 (2026-11-04)
 

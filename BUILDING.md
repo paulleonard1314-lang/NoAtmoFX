@@ -30,3 +30,7 @@ The bundle has to be built with the same Unity version as the game: **Unity 2022
 The `.bytes` files are raw RGBA8 noise volumes (Shape 128³, Detail 32³) and the cirrus texture (1024²). The build script turns them into Unity textures before building the bundle. `tools/bake.py` regenerates the cirrus texture (Python 3 with numpy, scipy and Pillow); it is only used when *Weather > OwnCirrus* is enabled.
 
 Any change to a `.shader` file needs a new bundle. Changes to the C# code only need a new DLL. Restart the game after replacing either.
+
+## Releasing
+
+Tag each release `v<version>` (the plugin version, e.g. `v1.3.0`) and attach `NoAtmoFX_v<version>.zip`. The DLL carries a DOORMAN preview (`src/NoAtmoFX/NoAtmoFX.doorman.json`, embedded as `doorman.json`) whose update check looks for that tag and asset name.

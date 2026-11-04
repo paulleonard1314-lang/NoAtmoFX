@@ -136,6 +136,7 @@ namespace NoAtmoFX
         internal static readonly int _ShaftSig = Shader.PropertyToID("_ShaftSig");
         internal static readonly int _Shear = Shader.PropertyToID("_Shear");
         internal static readonly int _SizeMix = Shader.PropertyToID("_SizeMix");
+        internal static readonly int _BaseRough = Shader.PropertyToID("_BaseRough");
         internal static readonly int _Soft = Shader.PropertyToID("_Soft");
         internal static readonly int _StepGrowth = Shader.PropertyToID("_StepGrowth");
         internal static readonly int _Steps = Shader.PropertyToID("_Steps");

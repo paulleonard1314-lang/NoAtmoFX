@@ -51,7 +51,7 @@ Shader "Hidden/NOClouds"
         float _PerHum, _PerIns, _PerCl, _PerCell, _PerWarp, _PerTurb, _PerCb, _PerS, _PerD;
         float _Hum, _Ins, _BaseRef, _BaseVar, _CoverScale, _Cirrus, _MidAmt;
         float _FrontType, _FrontPos, _FrontWidth;   // 0 none, 1 cold, 2 warm; position along the wind (m, relative to _G)
-        float _Density, _Erosion, _Dome, _Billow, _Soft;
+        float _Density, _Erosion, _Dome, _Billow, _Soft, _BaseRough;
         float _Warp, _Turb, _Stretch, _SizeMix, _Anvil, _AnvilShift, _Shear, _Veer;
         float2 _WindDir;
         float _Steps, _LightSteps, _MinStep, _StepGrowth, _MaxStep, _MaxDist;
@@ -312,7 +312,11 @@ Shader "Hidden/NOClouds"
                         float skn = 1 - q;
                         float Htop = Hc * pow(saturate(1 - q * q), 0.8);           // bell-shaped dome
                         float Fm = Htop - z0 + (bil - 0.48) * _Billow * Hc * 0.5 * saturate(skn * 3);
-                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs);
+                        // underside: each cloud sits a little above the layer base and its bottom curves up toward the
+                        // edge, with a soft lower boundary (a hard cut at the layer base sliced every cloud flat)
+                        float lift = _BaseRough * (min(0.12 * Hc, 180) * h2.z + 0.22 * Hc * q * q * q);
+                        float dkB = saturate((z0 - lift) / ((20 + _BaseRough * 0.05 * Hc) * fs));
+                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs) * dkB;
                         if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); }
                     }
                 }
