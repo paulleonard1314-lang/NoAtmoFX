@@ -31,7 +31,7 @@ namespace NoAtmoFX
         ConfigEntry<KeyboardShortcut> _toggleKey, _menuKey, _dumpKey;
         ConfigEntry<bool> _wgOn; ConfigEntry<float> _wgInt, _wgFreeze, _wgRainTau, _wgFrostReach, _wgFrostWhite, _wgRefract; ConfigEntry<int> _wgTest, _wgRainSrc; ConfigEntry<float> _wgSize, _wgAir;
         internal NOCWetGlass Wet; WetGlassPass _gpass; AssetBundle _ab;
-        internal NOCAtmos Atmos; AtmosPass _apass; internal bool RaysActive, ShaftsActive; internal int DownscaleNow = 2; internal RenderTexture CbRT, ReflCloudRT; internal Vector2 GDLast;
+        internal NOCNukes Nukes; internal NOCAtmos Atmos; AtmosPass _apass; internal bool RaysActive, ShaftsActive; internal int DownscaleNow = 2; internal RenderTexture CbRT, ReflCloudRT; internal Vector2 GDLast;
         internal float ProbeCloudAt; internal bool ProbeAtValid;
         ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
         internal RenderTexture ProbeRT;
@@ -88,6 +88,18 @@ namespace NoAtmoFX
         // ---------- language: config is in English, the menu can also be shown in Portuguese ----------
         static readonly Dictionary<string, string> PtDesc = new Dictionary<string, string>
         {
+            { "Nuclear/Enabled", "Explosões nucleares empurram as nuvens: abre um buraco atrás da onda de choque, a nuvem se acumula na borda e anéis de condensação se formam em volta do cogumelo." },
+            { "Nuclear/HoleSize", "Tamanho do buraco que a explosão abre nas nuvens, em raios de explosão ((kg de TNT)^(1/3) m: 1 Mt = 1 km). 7 = 7 km para 1 Mt." },
+            { "Nuclear/WilsonCloud", "Casca de condensação atrás da onda de choque nos primeiros segundos (mais forte em ar úmido). 0 = desliga." },
+            { "Nuclear/Rings", "Capuzes (pileus) e saias (velum) em volta do cogumelo subindo. 0 = desliga." },
+            { "Nuclear/RingSize", "Até onde as saias (velum) se espalham, em raios de explosão (8 = 8 km para 1 Mt)." },
+            { "Nuclear/FireballLight", "Luz da bola de fogo nas nuvens. 0 = desliga." },
+            { "Nuclear/Duration", "Minutos até o buraco fechar e os anéis sumirem (devagar, na segunda metade)." },
+            { "Nuclear/MinYield", "Menor explosão (quilotons) que mexe nas nuvens quando o efeito não tem cogumelo." },
+            { "Nuclear/UnlockNukes", "Teste: o jogador pode escolher armas nucleares em qualquer missão (Free Flight também), ignorando escalada, patente e estoque de ogivas. Só funciona sozinho ou como host. A IA não muda." },
+            { "Nuclear/TestBlastKey", "Teste: uma explosão (só nas nuvens, sem dano) à frente da câmera." },
+            { "Nuclear/TestYield", "Potência da explosão de teste em quilotons." },
+            { "Nuclear/TestDistance", "Distância da explosão de teste à frente da câmera (km), 500 m acima do mar." },
             { "General/ConfigVersion", "Não mexer: versão dos padrões (a config é refeita quando muda)." },
             { "General/Enabled", "Liga as nuvens volumétricas." },
             { "General/ToggleKey", "Liga/desliga as nuvens." },
@@ -223,7 +235,8 @@ namespace NoAtmoFX
             { "Quality", "Qualidade" },
             { "Shadows", "Sombra" },
             { "Glass", "Vidro" },
-            { "Atmosphere", "Atmosfera" }
+            { "Atmosphere", "Atmosfera" },
+            { "Nuclear", "Nuclear" }
         };
         bool Pt => _lang.Value == 2 || (_lang.Value == 0 && Application.systemLanguage == SystemLanguage.Portuguese);
         string T(string en, string pt) => Pt ? pt : en;
@@ -403,6 +416,7 @@ namespace NoAtmoFX
             _wpass = new WaterPass(this);
             _spass = new ShadowPass(this);
             Atmos = new NOCAtmos(this); Atmos.Init(_ab); _apass = new AtmosPass(this);
+            Nukes = new NOCNukes(this, C); Nukes.Patch();
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             Log.LogInfo("NoAtmoFX " + Version + " loaded.");
         }
@@ -768,6 +782,7 @@ namespace NoAtmoFX
                 _windZ += 0.34 * _windSpeed.Value * dt;
             }
             _effBottom = Mathf.Max(0, _effBottom);
+            Nukes?.Step(dt, _level, TargetCamera(), _windX, _windZ);
             // game base and conditions also change slowly (the game can switch all at once)
             // change time: everything that changes the cloud field follows the weather slowly
             float Tc = Mathf.Max(12f, _changeMin.Value * 12f);   // two smoothing stages in series: ~95% at ChangeTime
@@ -954,6 +969,8 @@ namespace NoAtmoFX
             m.SetFloat("_CbTop", cbTop);
             m.SetFloat("_Bottom", 200f);
             m.SetFloat("_VolTop", cbTop * (_supercell.Value > 0 ? 1.12f : 1f));
+            // nuclear blast: rings/caps can be higher than the normal cloud volume
+            if (Nukes != null) { Nukes.Apply(m, cam, g, _windX, _windZ, _H); if (Nukes.Active && Nukes.TopAlt > 0) m.SetFloat("_VolTop", Mathf.Max(cbTop * (_supercell.Value > 0 ? 1.12f : 1f), Nukes.TopAlt)); }
             m.SetFloat("_Supercell", _supercell.Value);
             m.SetFloat("_WExt", _maxDist.Value);
             m.SetVector("_WTS", new Vector4(1f / 1024, 1f / 1024, 1024, 1024));
@@ -1089,7 +1106,7 @@ namespace NoAtmoFX
 
         void DrawWin(int id)
         {
-            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Quality" } })
+            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Nuclear", "Quality" } })
             {
                 GUILayout.BeginHorizontal();
                 foreach (var s in row)
@@ -1098,6 +1115,7 @@ namespace NoAtmoFX
             }
             if (Pt) GUILayout.Label($"Tempo: condições {_cond:F2}, hora {_tod:F1} (aquecimento {_heat:F2}), umidade {_H:F2}, instabilidade {_I:F2}, frente {(_front == 1 ? "fria" : _front == 2 ? "quente" : "nenhuma")}, base ref {_effBottom:F0} m, cobertura {_effCoverage:F2}, vento {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
             else GUILayout.Label($"Weather: conditions {_cond:F2}, hour {_tod:F1} (heating {_heat:F2}), humidity {_H:F2}, instability {_I:F2}, front {(_front == 1 ? "cold" : _front == 2 ? "warm" : "none")}, base ref {_effBottom:F0} m, coverage {_effCoverage:F2}, wind {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
+            if (_section == "Nuclear" && Nukes != null && GUILayout.Button(T("Test blast now (clouds only, ahead of the camera)", "Explosão de teste agora (só nas nuvens, à frente da câmera)"))) Nukes.TestNow = true;
             _scroll = GUILayout.BeginScrollView(_scroll);
             var small = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
             small.normal.textColor = new Color(0.75f, 0.75f, 0.75f);

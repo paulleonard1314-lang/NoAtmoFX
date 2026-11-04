@@ -21,10 +21,12 @@
     <Compile Include="Plugin.cs" />
     <Compile Include="WetGlass.cs" />
     <Compile Include="Atmos.cs" />
+    <Compile Include="Nuke.cs" />
     <Reference Include="mscorlib"><HintPath>$(M)/mscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="netstandard"><HintPath>$(M)/netstandard.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System"><HintPath>$(M)/System.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System.Core"><HintPath>$(M)/System.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(NO)/BepInEx/core/0Harmony.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx"><HintPath>$(NO)/BepInEx/core/BepInEx.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(M)/UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(M)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>

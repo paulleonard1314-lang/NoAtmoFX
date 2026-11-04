@@ -224,7 +224,7 @@ Shader "Hidden/NOClouds"
         }
 
         // ---------- 3D density ----------
-        float density(float3 p, bool cheap, out float hAmb)
+        float densityBase(float3 p, bool cheap, out float hAmb)
         {
             hAmb = 0;
             float alt = altOf(p);
@@ -453,6 +453,118 @@ Shader "Hidden/NOClouds"
             return d * post * _Density * saturate(hAmb * 4 + 0.4);
         }
 
+        // ---------- nuclear blasts ----------
+        // The shock front (same speed as the game's Shockwave: 0.5*bp + 340 m/s) pushes the cloud outward:
+        // a hole opens behind it and the pushed cloud piles up in a dense rim that travels with the front.
+        // Material map (area preserving): d0^2 = d^2 - Rh^2 * W, W = 1 behind the hole, 0 at the front,
+        // so nothing ahead of the front moves. Condensation (Wilson cloud, pileus caps and velum skirts around
+        // the mushroom cap) is added on top. bp = blast power = (kg TNT)^(1/3) m.
+        float _NkN;            // active blasts (0..4)
+        float4 _NkP[4];        // xyz: blast center (camera-relative, drifts with the clouds), w: strength (fades out)
+        float4 _NkS[4];        // x: shock front radius, y: hole radius, z: bp, w: Wilson cloud strength
+        float4 _NkC[4];        // xyz: mushroom cap center (camera-relative), w: cap radius
+        float4 _NkRg[16];      // rings, blast i ring j at [i*4+j]: x height (camera-relative y), y outer radius (0 = none)
+        float4 _NkL[4];        // fireball light: xyz position (camera-relative), w intensity
+        float4 _NkLC;          // fireball light colour
+        float _NkRing;         // ring density (amount x humidity)
+
+        float3 nukeWarp(float3 p, out float boost)
+        {
+            boost = 1;
+            [loop] for (int i = 0; i < (int)_NkN; i++)
+            {
+                float4 P = _NkP[i], S = _NkS[i];
+                float3 v = p - P.xyz;
+                float d = length(v);
+                float R = S.x;
+                if (d >= R || S.y < 1) continue;                        // the front has not got here yet
+                // ragged hole edge (big lobes, not a perfect circle)
+                float2 hn = v.xz / max(S.y * 0.45, 50) + float2(3.1, 7.7) * i;
+                float lob = t2(hn, 0.33).r * 0.6 + t2(hn * 2.3, 0.71).r * 0.4;
+                float Rh = S.y * P.w * (1 + (lob - 0.67) * 0.55);
+                float u = saturate((d - Rh) / max(R - Rh, 1));
+                float W = 1 - u * u * u;
+                // area preserving (the layers are thin: the cloud moves sideways): d0^2 = d^2 - Rh^2 W
+                float d2 = d * d - Rh * Rh * W;
+                if (d2 <= 0) { boost = 0; return p; }                    // inside the hole
+                float d0 = sqrt(d2);
+                // pile-up just behind the front (shock compression) + radially squashed rim (permanent)
+                float J = 1 + Rh * Rh * 3 * u * u / max(R - Rh, 1) / (2 * d);
+                float sq = d / max(d0, 1);
+                boost *= min(min(J, 2.2) * (1 + 0.6 * saturate(sq - 1)), 2.6);
+                // the cloud that was near the center went into the fireball and evaporated: soft hole edge
+                boost *= saturate((d0 - 0.3 * Rh) / (0.3 * Rh));
+                float3 p0 = P.xyz + v * (d0 / max(d, 1));
+                p0.y = lerp(p.y, p0.y, 0.4);                             // mostly sideways (layers stay layers)
+                p = p0;
+            }
+            return p;
+        }
+
+        float nukeCond(float3 p, out float hN)
+        {
+            hN = 0.8;
+            float dm = 0;
+            [loop] for (int i = 0; i < (int)_NkN; i++)
+            {
+                float4 P = _NkP[i], S = _NkS[i], C = _NkC[i];
+                // Wilson cloud: thin condensation shell right behind the front, a few seconds
+                if (S.w > 0.001)
+                {
+                    float3 v = p - P.xyz;
+                    float R = S.x, w = 0.05 * R + 40;
+                    float dd = abs(length(v) - (R - w));
+                    if (dd < w)
+                    {
+                        float2 wn = v.xz / (0.3 * R + 100) + v.y / (0.5 * R + 100);
+                        float n = t2(wn, frac(0.17 * i + 0.4)).r;
+                        float sh = saturate(1 - dd / w) * saturate((n - 0.5) / 0.25);
+                        dm = max(dm, S.w * sh * 0.6);
+                    }
+                }
+                // pileus caps / velum skirts: flat discs at the heights the rising cap pushed through
+                float capR = max(C.w, 50);
+                float2 rv = p.xz - C.xz;
+                float r = length(rv);
+                [loop] for (int j = 0; j < 4; j++)
+                {
+                    float2 rg = _NkRg[i * 4 + j].xy;
+                    float rO = rg.y;
+                    if (rO < 1 || r > rO * 1.3) continue;
+                    float hj = rg.x;
+                    float rel = (C.y - hj) / capR;                       // cap center relative to the layer, in cap radii
+                    // pileus: the layer bulges over the cap as it comes up; once the cap is through it is
+                    // pierced and relaxes into a flat skirt (velum) around the stem
+                    float lift = capR * 0.75 * smoothstep(-2.2, 0, rel) * (rel > 0.3 ? exp(-(rel - 0.3) * 1.2) : 1);
+                    float hs = hj + lift * exp(-(r * r) / (2.6 * capR * capR));
+                    float hole = capR * 1.05 * saturate((rel - 0.3) / 0.6);
+                    float2 nq = rv / (rO * 0.22 + 200) + float2(1.7 * j, 4.3 * i);
+                    float n = t2(nq, frac(0.13 + 0.21 * j)).r * 0.6 + t2(rot(nq, 0.8) * 2.7, frac(0.57 + 0.11 * j)).r * 0.4;
+                    float q = r / rO + (n - 0.67) * 0.45;
+                    float th = (0.22 * capR + 120) * (0.55 + 0.9 * saturate((n - 0.5) / 0.3)) * sqrt(saturate(1 - q * q));
+                    float dy = abs(p.y - hs);
+                    float sl = saturate((th - dy) / (0.5 * th + 1));
+                    float dr = saturate((1 - q) / 0.18) * sl * saturate((r - hole) / (0.2 * capR));
+                    dr *= smoothstep(-2.6, -1.6, rel) * P.w;
+                    dm = max(dm, dr * _NkRing);
+                }
+            }
+            return dm;
+        }
+
+        float density(float3 p, bool cheap, out float hAmb)
+        {
+            if (_NkN < 0.5) return densityBase(p, cheap, hAmb);
+            float boost;
+            float3 p0 = nukeWarp(p, boost);
+            float d = 0; hAmb = 0;
+            if (boost > 0.001) d = densityBase(p0, cheap, hAmb) * boost;
+            float hN;
+            float dn = nukeCond(p, hN) * _Density;
+            if (dn > d) { d = dn; hAmb = hN; }
+            return d;
+        }
+
         // ---------- rain ----------
         // how much rain (0..1) falls under column x: strong cumulonimbus, very thick cumulus (shower), humid stratus (drizzle).
         // Rain leaves the BASE of its own cloud (samples the cloud just above the base), leans with the wind and
@@ -480,7 +592,7 @@ Shader "Hidden/NOClouds"
             float3 q = p + up * (drop + 400) - float3(_WindVel.x, 0, _WindVel.z) * (drop / 9);
             float hA;
             // two heights averaged: the eroded cloud edge alone made the mask flicker on and off (speckles)
-            float dB = 0.5 * (density(q, true, hA) + density(q + up * 500, true, hA)) / max(_Density, 1e-4);
+            float dB = 0.5 * (densityBase(q, true, hA) + densityBase(q + up * 500, true, hA)) / max(_Density, 1e-4);
             // far away the march steps are km long: wider, softer mask so it does not turn into speckled drizzle
             float far = saturate(length(p) / 12000);
             // curtain like the reference photos: thin, almost vertical streaks (slightly slanted with height)
@@ -666,6 +778,12 @@ Shader "Hidden/NOClouds"
                             float fd = length(p - _FlashP.xyz);
                             S += _FlashCol.rgb * (_FlashP.w * exp(-fd / 1300) * (0.35 + 0.65 * ao));
                         }
+                        [loop] for (int nl = 0; nl < (int)_NkN; nl++)   // nuclear fireball light
+                        {
+                            float4 NL = _NkL[nl];
+                            float3 fv = p - NL.xyz; float bp3 = 3 * _NkS[nl].z;
+                            S += _NkLC.rgb * (NL.w * (0.35 + 0.65 * ao) / (1 + dot(fv, fv) / (bp3 * bp3)));
+                        }
                         float tr = exp(-dens * _Absorb * stp);
                         col += T * S * (1 - tr);
                         float wgt = T * (1 - tr);
@@ -792,7 +910,7 @@ Shader "Hidden/NOClouds"
         {
             float hA;
             float d0 = 0;
-            [unroll] for (int k = 0; k < 4; k++)                 // average over a ~30 m cube (no flicker at the edge)
+            [loop] for (int k = 0; k < 4; k++)                 // average over a ~30 m cube (no flicker at the edge)
             {
                 float3 o = float3((k & 1) ? 15 : -15, (k & 2) ? 8 : -8, (k == 1 || k == 2) ? 15 : -15);
                 d0 += density(o, true, hA);
@@ -817,7 +935,7 @@ Shader "Hidden/NOClouds"
             {
                 // second pixel: rain at the camera (average of 4 nearby points) and nearby cumulonimbus
                 float rb, rr = 0;
-                [unroll] for (int kk = 0; kk < 4; kk++) rr += rainAt(float3((kk & 1) ? 40 : -40, 0, (kk & 2) ? 40 : -40), rb, false);
+                [loop] for (int kk = 0; kk < 4; kk++) rr += rainAt(float3((kk & 1) ? 40 : -40, 0, (kk & 2) ? 40 : -40), rb, false);
                 return float4(rr * 0.25, cb, 0, 0);
             }
             return float4(saturate(d0), tau, cb, camAlt);

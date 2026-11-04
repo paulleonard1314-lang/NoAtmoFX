@@ -17,6 +17,7 @@ The clouds are driven by the mission weather. Humidity and instability decide wh
 - Turbulence inside clouds, much stronger in storms.
 - Wet canopy: droplets that streak with speed in cloud and rain, and frost above the freezing level.
 - Clouds lit by the moon at night.
+- Nuclear blasts push the clouds away: a hole opens behind the shock front, cloud piles up at its rim, and condensation caps and skirts form around the rising mushroom cloud. The fireball lights up the clouds around it.
 - Clouds are also drawn into the reflection probe, so the sea reflects them.
 - The game's own cirrus is kept.
 - Weather changes are smoothed over several minutes so the sky never jumps.
@@ -47,6 +48,7 @@ To uninstall, delete the `BepInEx/plugins/NoAtmoFX` folder.
 | F10 | Clouds on/off |
 | F11 | Tuning menu (settings are saved when it closes) |
 | Shift+F10 | Write a diagnostic to `BepInEx/LogOutput.log` |
+| F8 | Test nuclear blast (clouds only, no damage, 25 km ahead of the camera) |
 
 Keys can be changed in the config file.
 
@@ -59,6 +61,12 @@ If performance is a problem, look at the *Quality* tab first:
 - *Downscale*: 1 = full resolution, 2 = half (default), 4 = quarter.
 - *Steps*: fewer steps run faster but show more banding in the distance.
 - Turning off *Shadows > Shadows* and *Atmosphere > LightShafts* gives the biggest gain.
+
+## Nuclear blasts
+
+The *Nuclear* tab controls how blasts affect the clouds: hole size, condensation rings, fireball light and how long the hole takes to close (20 minutes by default). F8 or the button on that tab sets off a test blast that only touches the clouds.
+
+*Nuclear > UnlockNukes* (off by default) lets you pick nuclear weapons in any mission, including Free Flight, so you can see the effect without playing through escalation. It only works offline or as host, and the AI is not affected.
 
 ## Nuclear Rain
 

@@ -8,6 +8,7 @@ First public release. The mod was called NO Clouds during development; it is now
 - Cloud shadows, cloud-on-cloud shadowing, light shafts and sun rays.
 - Rain curtains, near-camera rain, height fog, lightning with thunder, in-cloud turbulence.
 - Wet canopy and frost.
+- Nuclear blasts open a hole in the clouds and form condensation caps and skirts around the mushroom cloud (*Nuclear* tab, F8 test blast, optional UnlockNukes).
 - Clouds in the sea reflection; the game's cirrus is kept.
 - Weather changes smoothed over *Weather > ChangeTime* (10 min by default).
 - Works with or without Nuclear Rain.
