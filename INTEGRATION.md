@@ -98,7 +98,7 @@ bool on = NoAtmoFXBridge.GetFeature("WetGlass");
 ```
 
 Feature names: `Clouds`, `Shadows`, `RainShafts`, `NearRain`, `Lightning`, `Turbulence`, `GodRays`,
-`LightShafts`, `Fog`, `WetGlass`, `NuclearClouds`, `KeepSun`, `Rainbow`, `Glory`. Strength effects return to the player's last
+`LightShafts`, `Fog`, `WetGlass`, `NuclearClouds`, `KeepSun`, `Rainbow`, `Glory`, `ValleyFog`, `MountainCloud`. Strength effects return to the player's last
 non-zero value when switched back on. `persist: true` (default) writes the player's NoAtmoFX config, like the
 F11 menu; use `false` for temporary changes. Switching is immediate.
 

@@ -63,6 +63,8 @@ Shader "Hidden/NOClouds"
         // atmosphere: lightning (camera-relative position + intensity), rain, god rays
         float4 _FlashP; float4 _FlashCol;
         float _Rainbow, _Glory;
+        // mountain fog: height map around the camera (r terrain, g valley floor, b ridge level; metres above sea)
+        sampler2D _OroTex; float4 _OroC, _OroG, _OroW; float _OroOn, _OroTop, _VFog, _CapFog, _MarchBottom;
         float _RainOn, _RainVis; float3 _WindVel; float _WetDark; float _Deck, _Supercell;
         float2 _SunUV; float _RaysAmt, _RaysOn;
 
@@ -564,6 +566,49 @@ Shader "Hidden/NOClouds"
             return dm;
         }
 
+        // ---------- mountain fog (own layer; the normal clouds are not touched) ----------
+        // valley fog: fills real valleys up to a flat level; upslope cloud: hugs windward slopes/peaks near the cloud base
+        float mountainFog(float3 p, out float hF)
+        {
+            hF = 0;
+            float alt = altOf(p);
+            if (alt > _OroTop) return 0;
+            float2 uv = (p.xz + _OroC.xy) * _OroC.z + 0.5;
+            if (any(uv < 0.02) || any(uv > 0.98)) return 0;
+            float edge = saturate(min(min(uv.x, uv.y), min(1 - uv.x, 1 - uv.y)) * 12 - 0.24);
+            // the game's world is flat and the clouds sit on a sphere: lift the terrain into cloud altitude
+            float curv = dot(p.xz, p.xz) / (2 * _R);
+            float4 T = tex2Dlod(_OroTex, float4(uv, 0, 0)) + float4(curv, curv, curv, 0);
+            float hg = alt - T.r;
+            if (hg < -30) return 0;
+            float2 wx = p.xz + _OroG.xy;   // fixed to the ground (does not drift with the cloud wind)
+            float n1 = t2(wx / 5000, 0.23).r, n2 = t2(wx / 2000, 0.61).g;
+            float stp = max(30, 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep));
+            float d = 0;
+            if (_VFog > 0.002)
+            {
+                float relief = T.b - T.g;
+                float depth = min(relief * 0.45, 40 + 200 * min(_VFog, 1.5)) * saturate((relief - 150) / 250) * saturate((n1 - 0.3) / 0.3);
+                float top = T.g + depth + (n2 - 0.5) * 30;
+                float dv = saturate((top - alt) / stp) * saturate(_VFog * 2) * saturate(depth / 40) * 0.8;
+                if (dv > d) { d = dv; hF = 0.3 + 0.6 * saturate(1 - (top - alt) / max(depth, 1)); }
+            }
+            if (_CapFog > 0.002)
+            {
+                float e = _OroW.z, du = _OroC.z * e;
+                float hx = tex2Dlod(_OroTex, float4(uv + float2(du, 0), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(du, 0), 0, 0)).r;
+                float hz = tex2Dlod(_OroTex, float4(uv + float2(0, du), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(0, du), 0, 0)).r;
+                float up = dot(float2(hx, hz) / (2 * e), _OroW.xy);   // terrain slope along the wind (> 0 = air is lifted)
+                float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+                float base = tex2Dlod(_WxB, float4(uvW, 0, 0)).r * 8000;
+                float lift = saturate(up / 0.1) * saturate((T.r - (base - 700)) / 400);
+                float th = (120 + 280 * lift) * (0.6 + 0.8 * n2);
+                float dc = lift * saturate(_CapFog) * saturate((th - hg) / max(stp, 40)) * saturate((n1 + n2 - 0.7) / 0.4) * 0.8;
+                if (dc > d) { d = dc; hF = saturate(hg / th); }
+            }
+            return d * edge * _Density;
+        }
+
         float density(float3 p, bool cheap, out float hAmb)
         {
             // one densityBase call site only (it is huge: every extra call site multiplies the compile time)
@@ -578,6 +623,12 @@ Shader "Hidden/NOClouds"
                 float hN;
                 float dn = nukeCond(p, hN) * _Density;
                 if (dn > d) { d = dn; hAmb = hN; }
+            }
+            if (_OroOn > 0.5)
+            {
+                float hF;
+                float df = mountainFog(p, hF);
+                if (df > d) { d = df; hAmb = hF; }
             }
             return d;
         }
@@ -773,7 +824,7 @@ Shader "Hidden/NOClouds"
             }
 
             float2 outer = sph(rd, _PlanetC, _R + _VolTop);
-            float2 inner = sph(rd, _PlanetC, _R + _Bottom);
+            float2 inner = sph(rd, _PlanetC, _R + _MarchBottom);   // 200 m, lower only while mountain fog is on
             float camAlt = length(_PlanetC) - _R;
             float T = 1;
             float3 col = 0;
@@ -785,7 +836,7 @@ Shader "Hidden/NOClouds"
                 t1 = outer.y;
                 if (inner.y > inner.x)
                 {
-                    if (camAlt < _Bottom) t0 = max(t0, inner.y);
+                    if (camAlt < _MarchBottom) t0 = max(t0, inner.y);
                     else if (inner.x > 0) t1 = min(t1, inner.x);
                 }
                 t1 = min(min(t1, sceneT), _MaxDist);

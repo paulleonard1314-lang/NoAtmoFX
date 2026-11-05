@@ -80,7 +80,7 @@ namespace NoAtmoFX
         internal double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; internal Vector3 _windS; float _windLogT = -100;
         internal float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; internal bool _wxInit; bool _frontInit;
         internal float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; internal int _front;
-        internal NOCSync Sync; internal NOCBoscali Boscali; internal float EvolveRate => _evolve.Value;
+        internal NOCSync Sync; internal NOCBoscali Boscali; internal NOCMountainFog Oro; internal float EvolveRate => _evolve.Value;
         readonly Dictionary<Camera, UniversalAdditionalCameraData> _camData = new Dictionary<Camera, UniversalAdditionalCameraData>();
         readonly Vector3[] _corners = new Vector3[4];
 
@@ -222,6 +222,8 @@ namespace NoAtmoFX
             { "Atmosphere/RainShafts", "Cortinas de chuva debaixo dos cúmulos-nimbos e cúmulos grossos (visíveis de longe)." },
             { "Atmosphere/Rainbow", "Arco-íris (principal + secundário) nas cortinas de chuva iluminadas. Raro de propósito: só com chuva de verdade, sol atrás de você e no ângulo certo. 0 = desliga." },
             { "Atmosphere/Glory", "Glória (anéis coloridos em volta do ponto oposto ao sol) e arco branco no topo de nuvens iluminadas logo abaixo de você. Raro de propósito. 0 = desliga." },
+            { "Atmosphere/ValleyFog", "Névoa de vale nas montanhas: da noite até o meio da manhã, vento fraco, céu mais limpo e ar úmido. Enche os vales de verdade até um nível plano e some depois que o sol nasce. Rara de propósito. 0 = desliga." },
+            { "Atmosphere/MountainCloud", "Nuvem de encosta: com ar úmido e vento, a nuvem gruda nas encostas do lado do vento e nos picos que chegam perto da base das nuvens; some do lado de trás. Rara de propósito. 0 = desliga." },
             { "Atmosphere/RainDensity", "Quanto a chuva tira a visibilidade (cortinas)." },
             { "Atmosphere/Lightning", "Relâmpagos nos cúmulos-nimbos (0 = desliga; maior = mais frequentes/fortes)." },
             { "Atmosphere/Turbulence", "Turbulência dentro das nuvens (0 = desliga). Cúmulo-nimbo sacode bem mais." },
@@ -436,6 +438,7 @@ namespace NoAtmoFX
             Nukes = new NOCNukes(this, C); Nukes.Patch();
             Sync = new NOCSync(this, C);
             Boscali = new NOCBoscali(C);
+            Oro = new NOCMountainFog(C);
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             NoAtmoFXApi.P = this; _onPrev = _on.Value;
             Log.LogInfo("NoAtmoFX " + Version + " loaded (integration API " + NoAtmoFXApi.ApiVersion + ").");
@@ -895,6 +898,8 @@ namespace NoAtmoFX
                 case "keepsun": return _keepSun;
                 case "rainbow": return _atRainbow;
                 case "glory": return _atGlory;
+                case "valleyfog": return Oro?.ValleyEntry;
+                case "mountaincloud": return Oro?.CapEntry;
             }
             return null;
         }
@@ -1099,6 +1104,8 @@ namespace NoAtmoFX
                 GDLast = _reflOwnMaps ? G2 - snap : d;
             }
             m.SetVector(ID._GD, GDLast);
+            // mountain fog (valley fog / upslope cloud): own layer, own height map
+            if (Oro != null) { if (!reflCam) Oro.Tick(g, _tod, _cond, _H, _windS); Oro.Apply(m, g); Oro.SetWind(m, _windS); }
             // atmosphere
             m.SetFloat(ID._RainOn, _atShafts.Value && (_H > 0.55f || _I > 0.5f || _front != 0) ? 1f : 0f);
             m.SetFloat(ID._RainVis, _atRainVis.Value);
