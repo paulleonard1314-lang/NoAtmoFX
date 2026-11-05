@@ -284,6 +284,7 @@ Shader "Hidden/NOClouds"
                 const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), YY = float3(0.25, 0.66, 0.12);
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
+                float bq = 0, bH = 0, bz = 0;   // the densest cloud here: for its underside below
                 [unroll] for (int ic = 0; ic < 3; ic++)
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
@@ -312,13 +313,17 @@ Shader "Hidden/NOClouds"
                         float skn = 1 - q;
                         float Htop = Hc * pow(saturate(1 - q * q), 0.8);           // bell-shaped dome
                         float Fm = Htop - z0 + (bil - 0.48) * _Billow * Hc * 0.5 * saturate(skn * 3);
-                        // underside: each cloud sits a little above the layer base and its bottom curves up toward the
-                        // edge, with a soft lower boundary (a hard cut at the layer base sliced every cloud flat)
-                        float lift = _BaseRough * (min(0.12 * Hc, 180) * h2.z + 0.22 * Hc * q * q * q);
-                        float dkB = saturate((z0 - lift) / ((20 + _BaseRough * 0.05 * Hc) * fs));
-                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs) * dkB;
-                        if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); }
+                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs);
+                        if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); bq = q; bH = Hc; bz = h2.z; }
                     }
+                }
+                // underside: each cloud sits a little above the layer base and its bottom curves up toward the
+                // edge, with a soft lower boundary (a hard cut at the layer base sliced every cloud flat).
+                // Applied once to the densest cloud, outside the unrolled loops, to keep the shader compile time down.
+                if (d > 0 && _BaseRough > 0)
+                {
+                    float lift = _BaseRough * (min(0.12 * bH, 180) * bz + 0.22 * bH * bq * bq * bq);
+                    d *= saturate((z0 - lift) / ((20 + _BaseRough * 0.05 * bH) * fs));
                 }
             }
             // stratus / stratocumulus: thin flat-topped layer
