@@ -11,6 +11,8 @@ Integration API for other mods (effects packs, weather systems). See [INTEGRATIO
 - Built-in adapter for the Unified Client Effects (Boscali) weather: the clouds follow its live, uncapped weather in single player, and our fog and near-camera rain step aside when its matching effects are on (*Integration* section).
 - The F11 weather line shows the weather source (mission, api, boscali, host, menu).
 - Cumulus undersides are no longer cut flat at the layer base: each cloud sits a little higher, its bottom curves up toward the edges and is softer (*Shape > BaseRoughness*, 0 = old look). Needs the new shader bundle.
+- Quality presets (*Quality > Preset*: Low, Medium, High, Ultra, Custom), also in the API (`Presets`, `SetPreset`, `CurrentPreset`, `PresetChanged`) for other mods' menus. Ultra keeps the look of previous versions.
+- Temporal reprojection (*Quality > Temporal*, off by default, on in High/Medium/Low): only a quarter (2x2) or half (checkerboard) of the cloud pixels is raymarched per frame; the rest is carried over from the previous frames, moved with the camera and the wind, and kept within the colours of the fresh pixels around it at the same distance, so nothing ghosts around the aircraft. Lightning, nuclear flashes and camera cuts are drawn in full. The benchmark gains a step with temporal on/off. Needs the new shader bundle; with the old one, clouds are simply drawn in full.
 - DOORMAN preview and GitHub update check embedded in the DLL. Releases are tagged `vX.Y.Z` with the asset `NoAtmoFX_vX.Y.Z.zip`.
 
 ## 1.2.0 (2026-11-04)

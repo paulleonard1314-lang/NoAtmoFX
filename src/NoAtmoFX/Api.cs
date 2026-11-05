@@ -63,6 +63,27 @@ namespace NoAtmoFX
         }
         public static bool GetFeature(string name) => P != null && P.GetFeature(name);
 
+        // ------------------------------------------------------------------ quality presets
+
+        /// <summary>Names accepted by SetPreset, lowest to highest. Ultra = every cloud pixel raymarched every frame
+        /// (the full look); High = the same look with temporal reprojection (a quarter of the rays per frame).
+        /// CurrentPreset can also read "Custom" (settings changed by hand).</summary>
+        public static readonly string[] Presets = { "Low", "Medium", "High", "Ultra" };
+
+        /// <summary>Applies a quality preset (case-insensitive). Immediate. Returns false for an unknown name.
+        /// persist = also write it to the player's config file.</summary>
+        public static bool SetPreset(string name, bool persist = true)
+        {
+            string n = string.IsNullOrEmpty(name) ? null : MatchName(name);
+            return P != null && n != null && P.ApplyPreset(n, persist);
+        }
+        /// <summary>"Low", "Medium", "High", "Ultra" or "Custom".</summary>
+        public static string CurrentPreset => P != null ? P._preset.Value : "Custom";
+        /// <summary>Fired when the preset name changes (chosen anywhere, or "Custom" after a setting was changed by hand).</summary>
+        public static event Action<string> PresetChanged;
+        internal static void RaisePreset(string n) { try { PresetChanged?.Invoke(n); } catch (Exception e) { NOCloudsPlugin.Log.LogWarning("API PresetChanged handler: " + e.Message); } }
+        static string MatchName(string n) { foreach (var x in Presets) if (string.Equals(x, n, StringComparison.OrdinalIgnoreCase)) return x; return null; }
+
         // ------------------------------------------------------------------ weather input
         // NaN (or -1 for the int ones) = "not set by me, keep following the mission".
 

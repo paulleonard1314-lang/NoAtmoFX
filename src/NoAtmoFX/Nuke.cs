@@ -273,7 +273,7 @@ namespace NoAtmoFX
         {
             int n = (On.Value) ? Mathf.Min(_b.Count, MAX) : 0;
             m.SetFloat(ID._NkN, n);
-            _top = 0;
+            _top = 0; LightNow = 0;
             if (n == 0) return;
             float life = Duration.Value * 60f;
             float bestL = 0; Color lc = Color.white;
@@ -306,12 +306,14 @@ namespace NoAtmoFX
                 _L[i] = new Vector4(fp.x, fp.y, fp.z, L);
                 if (L > bestL) { bestL = L; lc = Color.Lerp(new Color(1f, 0.93f, 0.82f), new Color(1f, 0.42f, 0.16f), Mathf.Clamp01(t / (2.5f * tau))); }
             }
+            LightNow = bestL;
             m.SetVectorArray(ID._NkP, _P); m.SetVectorArray(ID._NkS, _S); m.SetVectorArray(ID._NkC, _C);
             m.SetVectorArray(ID._NkRg, _Rg); m.SetVectorArray(ID._NkL, _L);
             m.SetVector(ID._NkLC, lc);
             m.SetFloat(ID._NkRing, Rings.Value * (0.45f + 0.35f * hum));
         }
 
+        internal float LightNow;   // brightest fireball light now (temporal reprojection marches in full while it changes)
         internal bool TestNow;   // button in the F11 menu
         internal float TopAlt => _top;
         internal bool Active => On.Value && _b.Count > 0;

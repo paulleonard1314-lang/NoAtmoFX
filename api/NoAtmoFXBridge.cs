@@ -60,6 +60,11 @@ public static class NoAtmoFXBridge
     public static bool SetFeature(string name, bool on, bool persist = true) => Call("SetFeature", name, on, persist) is bool b && b;
     public static bool GetFeature(string name) => Call("GetFeature", name) is bool b && b;
 
+    // ---- quality presets: "Low", "Medium", "High", "Ultra" (CurrentPreset can also be "Custom") ----
+    public static string[] Presets { get { Init(); try { return _t?.GetField("Presets", BindingFlags.Public | BindingFlags.Static)?.GetValue(null) as string[] ?? new string[0]; } catch { return new string[0]; } } }
+    public static bool SetPreset(string name, bool persist = true) => Call("SetPreset", name, persist) is bool b && b;
+    public static string CurrentPreset => Get<string>("CurrentPreset") ?? "Custom";
+
     // ---- weather input: targets, the clouds glide to them over minutes. NaN / -1 = keep following the mission ----
     public static void SetConditions(float c) => Call("SetConditions", c);          // 0 fair .. 1 storm
     public static void SetCloudBase(float metres) => Call("SetCloudBase", metres);  // above sea level
@@ -97,4 +102,5 @@ public static class NoAtmoFXBridge
     public static bool OnEnabledChanged(Action<bool> h, bool add = true) => Subscribe("EnabledChanged", h, add);
     public static bool OnLightning(Action<Vector3, bool> h, bool add = true) => Subscribe("Lightning", h, add);
     public static bool OnNuclearBlast(Action<Vector3, float> h, bool add = true) => Subscribe("NuclearBlast", h, add);
+    public static bool OnPresetChanged(Action<string> h, bool add = true) => Subscribe("PresetChanged", h, add);
 }
