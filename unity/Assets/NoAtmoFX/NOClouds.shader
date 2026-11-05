@@ -269,6 +269,8 @@ Shader "Hidden/NOClouds"
             float bil = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 
             float d = 0, an = 0, post = 1, wallD = 0;
+            // soft transitions are at least two march steps wide, or they turn into contour bands (slices) at range
+            float bstp = 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep);
 
             // cumulus: cells stretched by the wind, dome, billows
             if (inCu)
@@ -284,8 +286,6 @@ Shader "Hidden/NOClouds"
                 const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), YY = float3(0.25, 0.66, 0.12);
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
-                // the underside fades over at least two march steps here, or it turns into contour bands (slices) at range
-                float bstp = 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep);
                 [loop] for (int ic = 0; ic < 3; ic++)   // not unrolled: keeps the shader compile time down
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
@@ -327,9 +327,14 @@ Shader "Hidden/NOClouds"
             if (inSt)
             {
                 float hs = (alt - base) / stTh;
-                float prof = saturate(hs / 0.15) * saturate((1 - hs) / 0.3);
-                float Fs = st * prof + (ns - 0.5) * 0.5 + (bil - 0.48) * 0.25 - 0.3;
-                float ds = saturate(Fs / 0.15) * 0.55;
+                // nearly flat base, lumpy top (stratocumulus): only the top follows the billows, so the deck no longer
+                // bends up and down as a whole like a ribbon; the wide noise only opens gaps and thins the deck a little
+                // the base has its own small waves (0..~140 m, 2-4 km), from a noise unrelated to the top's
+                float bU = saturate(0.6 * t2(rot(x, 2.1) / 2600, 0.27).g + 0.4 * t2(rot(x, -0.8) / 4100, 0.81).b - 0.25) * 200;
+                float fB = saturate((alt - base - bU) / max(80, bstp));
+                float Ft = (1 - hs) * 1.2 + (bil - 0.48) * 1.1 + (s.r - 0.67) * 0.35 + (ns - 0.5) * 0.15 - 0.25;
+                float gap = saturate((st + (ns - 0.5) * 0.6 - 0.35) / 0.2);
+                float ds = saturate(Ft * 1.2 * stTh / max(100, bstp)) * fB * gap * 0.55;
                 if (ds > d) { d = ds; hAmb = hs; }
             }
             // altocumulus / altostratus: mid layer (low coverage = patches; high = sheet)
