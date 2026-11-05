@@ -19,7 +19,7 @@ namespace NoAtmoFX
     [BepInPlugin("paul.no.clouds", "NoAtmoFX", Version)]   // GUID kept from NO Clouds so existing settings carry over
     public class NOCloudsPlugin : BaseUnityPlugin
     {
-        public const string Version = "1.3.0";
+        public const string Version = "1.3.1";
         internal static ManualLogSource Log;
 
         // General
