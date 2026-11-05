@@ -6,6 +6,10 @@ namespace NoAtmoFX
     static class ID
     {
         internal static readonly int _Absorb = Shader.PropertyToID("_Absorb");
+        internal static readonly int _LightLod = Shader.PropertyToID("_LightLod");
+        internal static readonly int _FootOn = Shader.PropertyToID("_FootOn");
+        internal static readonly int _NOCFoot = Shader.PropertyToID("_NOCFoot");
+        internal static readonly int _JfaStep = Shader.PropertyToID("_JfaStep");
         internal static readonly int _AcL2W = Shader.PropertyToID("_AcL2W");
         internal static readonly int _AcW2L = Shader.PropertyToID("_AcW2L");
         internal static readonly int _AmbBottom = Shader.PropertyToID("_AmbBottom");

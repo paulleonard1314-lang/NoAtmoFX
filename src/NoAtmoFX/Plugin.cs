@@ -19,7 +19,7 @@ namespace NoAtmoFX
     [BepInPlugin("paul.no.clouds", "NoAtmoFX", Version)]   // GUID kept from NO Clouds so existing settings carry over
     public class NOCloudsPlugin : BaseUnityPlugin
     {
-        public const string Version = "1.3.1";
+        public const string Version = "1.4.0";
         internal static ManualLogSource Log;
 
         // General
@@ -52,7 +52,8 @@ namespace NoAtmoFX
         ConfigEntry<float> _absorb, _lightAbsorb, _g1, _g2, _gMix, _powder, _powderK, _sunMul, _ambMul, _exposure, _msA, _msB, _sunWhite, _fogAmt;
         ConfigEntry<int> _tonemap;
         // Quality
-        ConfigEntry<int> _steps, _lightSteps, _downscale;
+        ConfigEntry<int> _steps, _lightSteps, _downscale, _lightLod;
+        ConfigEntry<bool> _emptySkip;
         ConfigEntry<float> _minStep, _stepGrowth, _maxStep, _maxDist;
         ConfigEntry<bool> _mapSlicing, _perfMeter; ConfigEntry<int> _shEvery, _temporal; internal ConfigEntry<string> _preset;
 
@@ -60,7 +61,7 @@ namespace NoAtmoFX
         CloudPass _pass;
         WaterPass _wpass;
         ShadowPass _spass;
-        internal RenderTexture WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT;
+        internal RenderTexture WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, FootA, FootB, FootD;
         internal int ShDFrame = -1; internal Camera ShDCam;
         internal int WxFrame = -1;
         internal RenderTexture CloudRT;
@@ -193,6 +194,8 @@ namespace NoAtmoFX
             { "Quality/Steps", "Máximo de passos de raymarch." },
             { "Quality/LightSteps", "Passos em direção ao sol." },
             { "Quality/Downscale", "1 = resolução cheia, 2 = metade, 4 = um quarto." },
+            { "Quality/LightLOD", "Luz do sol mais barata dentro das nuvens onde não dá pra notar: além de ~18-28 km e no fundo da nuvem (onde passa menos de ~25% da vista). Metade das amostras de luz, mesmo comprimento total, sem detalhe fino ali. 0 = desligado (Ultra)." },
+            { "Quality/EmptySkip", "Pulo do ar vazio: um mapa pequeno com a distância de cada ponto até o lugar mais próximo onde pode haver nuvem deixa o raymarch saltar o ar limpo entre as nuvens. Mesmo visual (o mapa é conservador), menos passos. Desligado = o raymarch da 1.3." },
             { "Quality/MinStep", "Passo mínimo (m)." },
             { "Quality/Preset", "Preset de qualidade: Low, Medium, High ou Ultra (Ultra = visual completo, todo pixel calculado todo quadro). Escolher um ajusta Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance e a resolução/passos da sombra; mexer em qualquer um desses à mão vira Custom." },
             { "Quality/Temporal", "Reprojeção temporal: 0 = desligada (todo pixel de nuvem calculado todo quadro), 1 = metade dos pixels por quadro (xadrez), 2 = um quarto por quadro (2x2). O resto vem dos quadros anteriores, movido com a câmera e preso às cores dos pixels novos em volta. Raios, clarões nucleares e cortes de câmera sempre são desenhados inteiros." },
@@ -390,6 +393,8 @@ namespace NoAtmoFX
             _preset = C.Bind("Quality", "Preset", "Custom", new ConfigDescription("Quality preset: Low, Medium, High or Ultra (Ultra = the full look, every pixel raymarched every frame). Choosing one sets Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance and the shadow resolution/steps; changing any of those by hand turns this into Custom.", new AcceptableValueList<string>(PresetNames)));
             _steps = C.Bind("Quality", "Steps", 256, new ConfigDescription("Maximum raymarch steps.", Ri(16, 512)));
             _lightSteps = C.Bind("Quality", "LightSteps", 4, new ConfigDescription("Steps toward the sun.", Ri(1, 6)));
+            _lightLod = C.Bind("Quality", "LightLOD", 1, new ConfigDescription("Cheaper sunlight inside the clouds where it cannot be told apart: beyond ~18-28 km and deep inside a cloud (where less than ~25% of the view still gets through). Half the light samples, same total length, no fine detail there. 0 = off (Ultra).", Ri(0, 1)));
+            _emptySkip = C.Bind("Quality", "EmptySkip", true, "Empty-space skipping: a small map of how far each spot is from the nearest place a cloud could be lets the raymarch jump over clear air between clouds. Same look (the map is conservative), fewer steps. Off = the 1.3 march.");
             _downscale = C.Bind("Quality", "Downscale", 2, new ConfigDescription("1 = full resolution, 2 = half, 4 = quarter.", Ri(1, 4)));
             _temporal = C.Bind("Quality", "Temporal", 0, new ConfigDescription("Temporal reprojection: 0 = off (every cloud pixel raymarched every frame), 1 = half of the pixels per frame (checkerboard), 2 = a quarter per frame (2x2). The rest comes from the previous frames, moved with the camera and kept within the colours of the fresh pixels around them. Lightning, nuclear flashes and camera cuts are always drawn in full.", Ri(0, 2)));
             _minStep = C.Bind("Quality", "MinStep", 15f, new ConfigDescription("Minimum step (m).", R(5, 200)));
@@ -632,7 +637,7 @@ namespace NoAtmoFX
             RenderPipelineManager.beginCameraRendering -= OnBeginCamera;
             SetGameCloudsHidden(false);
             Wet?.Release(); if (ProbeRT != null) ProbeRT.Release(); Atmos?.Release();
-            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, TFresh, THist0, THist1 }) if (r != null) r.Release();
+            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, TFresh, THist0, THist1, FootA, FootB, FootD }) if (r != null) r.Release();
         }
 
         // ---------- rain: our own, or matched to the Nuclear Rain mod ----------
@@ -979,6 +984,13 @@ namespace NoAtmoFX
             return rt;
         }
 
+        static RenderTexture MakePointRT(RenderTexture rt, RenderTextureFormat f, string n)
+        {
+            rt = MakeRT(rt, 512, 512, f, n);
+            rt.filterMode = FilterMode.Point;
+            return rt;
+        }
+
         // weather maps: once per frame, by the first pass that needs them
         Vector2 _mapC; float _mapWtx; bool _mapValid, _mapFull, _reflOwnMaps; int _mapRR;
         internal void EnsureWeather(CommandBuffer cmd, Material mat, bool refl = false)
@@ -1002,6 +1014,27 @@ namespace NoAtmoFX
                 if (all || k == 3) cmd.Blit((Texture)null, WxC, mat, 5);
             }
             cmd.SetGlobalTexture(ID._WxA, WxA); cmd.SetGlobalTexture(ID._WxB, WxB); cmd.SetGlobalTexture(ID._WxC, WxC); cmd.SetGlobalTexture(ID._WarpTex, WxP);
+            // footprint distance map (empty-space skipping): redone once all four maps have had their turn
+            // (the weather changes over minutes; the map keeps a safety margin), or whenever they all were redone
+            if (_emptySkip.Value && mat.passCount > 20 && (all || k == 3 || FootD == null || !FootD.IsCreated()))   // older bundles have no footprint passes
+            {
+                using (new ProfilingScope(cmd, refl ? null : Perf.Weather))
+                {
+                    FootA = MakePointRT(FootA, RenderTextureFormat.RGFloat, "NOC_FootA");
+                    FootB = MakePointRT(FootB, RenderTextureFormat.RGFloat, "NOC_FootB");
+                    FootD = MakePointRT(FootD, RenderTextureFormat.RFloat, "NOC_FootD");
+                    cmd.Blit((Texture)null, FootA, mat, 18);
+                    // jump flood 256..1 texels, plus one more pass of 1 (fixes most of the rare misses)
+                    for (int st = 256; st >= 0; st = st > 1 ? st / 2 : st - 1)
+                    {
+                        cmd.SetGlobalFloat(ID._JfaStep, Mathf.Max(st, 1) / 512f);
+                        cmd.Blit(FootA, FootB, mat, 19);
+                        var sw = FootA; FootA = FootB; FootB = sw;
+                    }
+                    cmd.Blit(FootA, FootD, mat, 20);
+                }
+                cmd.SetGlobalTexture(ID._NOCFoot, FootD);
+            }
             if (refl) { _mapValid = false; return; }   // maps now centered on the probe: the camera rebuilds its own next
             _mapFull = false;
             WxFrame = Time.frameCount;
@@ -1066,20 +1099,20 @@ namespace NoAtmoFX
         // mod's panel) makes the preset read Custom again; the player's own values are never overwritten unless a
         // named preset is chosen. On load, Custom is replaced by the name of the preset the values match.
         internal static readonly string[] PresetNames = { "Custom", "Low", "Medium", "High", "Ultra" };
-        //                                    Downscale Temporal Steps LightSteps MaxStep MaxDistance ShadowRes ShadowSteps
+        //                                    Downscale Temporal Steps LightSteps MaxStep MaxDistance ShadowRes ShadowSteps LightLOD
         static readonly float[][] PresetVals =
         {
-            new float[] { 3, 2, 128, 2, 500, 60000, 256, 8 },     // Low
-            new float[] { 2, 2, 192, 3, 300, 80000, 384, 12 },    // Medium
-            new float[] { 2, 2, 256, 4, 300, 80000, 512, 16 },    // High: Ultra's look, a quarter of the rays per frame
-            new float[] { 2, 0, 256, 4, 300, 80000, 512, 16 },    // Ultra: everything every frame (the look up to 1.3)
+            new float[] { 3, 2, 128, 2, 500, 60000, 256, 8, 1 },     // Low
+            new float[] { 2, 2, 192, 3, 300, 80000, 384, 12, 1 },    // Medium
+            new float[] { 2, 2, 256, 4, 300, 80000, 512, 16, 1 },    // High: Ultra's look, a quarter of the rays per frame
+            new float[] { 2, 0, 256, 4, 300, 80000, 512, 16, 0 },    // Ultra: everything every frame (the look up to 1.3)
         };
         ConfigEntryBase[] _pEntries;
         bool _pApplying;
 
         void InitPresets()
         {
-            _pEntries = new ConfigEntryBase[] { _downscale, _temporal, _steps, _lightSteps, _maxStep, _maxDist, _shRes, _shSteps };
+            _pEntries = new ConfigEntryBase[] { _downscale, _temporal, _steps, _lightSteps, _maxStep, _maxDist, _shRes, _shSteps, _lightLod };
             Config.SettingChanged += (s, a) =>
             {
                 if (_pApplying) return;
@@ -1250,6 +1283,8 @@ namespace NoAtmoFX
 
             m.SetFloat(ID._Steps, _steps.Value);
             m.SetFloat(ID._LightSteps, Mathf.Clamp(_lightSteps.Value, 1, 6));
+            m.SetFloat(ID._LightLod, _lightLod.Value > 0 ? 1 : 0);
+            m.SetFloat(ID._FootOn, _emptySkip.Value && m.passCount > 20 && FootD != null && FootD.IsCreated() ? 1 : 0);
             m.SetFloat(ID._MinStep, _minStep.Value);
             m.SetFloat(ID._StepGrowth, _stepGrowth.Value);
             m.SetFloat(ID._MaxStep, Mathf.Max(_maxStep.Value, _minStep.Value));
@@ -1441,19 +1476,20 @@ namespace NoAtmoFX
         struct BenchStep { public string en, pt; public System.Action set; }
         BenchStep[] _bSteps; int _bIdx = -1; float _bT0; double _bSum; int _bN; float _bWorst; readonly List<float> _bDts = new List<float>();
         string[] _bRes; bool _bSave;
-        bool _bOn, _bSh, _bRain, _bSlice; float _bRays, _bShafts; int _bEvery, _bDs, _bTmp;
+        bool _bOn, _bSh, _bRain, _bSlice, _bSkip; float _bRays, _bShafts; int _bEvery, _bDs, _bTmp, _bLod;
         const float BenchWarm = 1.5f, BenchLen = 5f;
 
         void StartBench()
         {
-            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value; _bTmp = _temporal.Value;
-            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; }
+            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value; _bTmp = _temporal.Value; _bSkip = _emptySkip.Value; _bLod = _lightLod.Value;
+            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; _emptySkip.Value = _bSkip; _lightLod.Value = _bLod; }
             _bSteps = new[]
             {
                 new BenchStep { en = "Mod off", pt = "Mod desligado", set = () => { Mine(); _on.Value = false; } },
                 new BenchStep { en = "Clouds only (no shadows, rays, shafts, rain curtains)", pt = "Só nuvens (sem sombra, raios, feixes, cortinas)", set = () => { Mine(); _shOn.Value = false; _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
                 new BenchStep { en = "Clouds + shadows", pt = "Nuvens + sombras", set = () => { Mine(); _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
                 new BenchStep { en = "Your settings", pt = "Suas configurações", set = () => Mine() },
+                new BenchStep { en = "Your settings without the 1.4 savings (EmptySkip and LightLOD off)", pt = "Suas configurações sem as economias da 1.4 (EmptySkip e LightLOD desligados)", set = () => { Mine(); _emptySkip.Value = false; _lightLod.Value = 0; } },
                 new BenchStep { en = "Your settings, old 1.1 way", pt = "Suas configurações, jeito antigo 1.1", set = () => { Mine(); _mapSlicing.Value = false; _shEvery.Value = 1; } },
                 new BenchStep { en = "Your settings, one Downscale step lower", pt = "Suas configurações, Downscale um nível abaixo", set = () => { Mine(); _downscale.Value = Mathf.Min(_bDs + 1, 4); } },
                 _bTmp > 0 ? new BenchStep { en = "Your settings, temporal off", pt = "Suas configurações, temporal desligado", set = () => { Mine(); _temporal.Value = 0; } }
@@ -1468,7 +1504,7 @@ namespace NoAtmoFX
         void StopBench(bool done)
         {
             if (_bIdx < 0) return;
-            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp;
+            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; _emptySkip.Value = _bSkip; _lightLod.Value = _bLod;
             Config.SaveOnConfigSet = _bSave;
             _bIdx = -1;
             if (done) Log.LogInfo("Benchmark results:\n" + string.Join("\n", _bRes));
@@ -1496,8 +1532,8 @@ namespace NoAtmoFX
                                   $"Teste rodando ({_bIdx + 1}/{_bSteps.Length}): {_bSteps[_bIdx].pt}. Deixe a câmera parada."));
                 if (GUILayout.Button(T("Stop", "Parar"))) StopBench(false);
             }
-            else if (GUILayout.Button(T($"Benchmark: switch parts on/off ({_bSteps?.Length ?? 6} x {BenchWarm + BenchLen:F0} s, camera still; settings are restored)",
-                                        $"Teste de desempenho: liga/desliga cada parte ({_bSteps?.Length ?? 6} x {BenchWarm + BenchLen:F0} s, câmera parada; as configurações voltam)")))
+            else if (GUILayout.Button(T($"Benchmark: switch parts on/off ({_bSteps?.Length ?? 8} x {BenchWarm + BenchLen:F0} s, camera still; settings are restored)",
+                                        $"Teste de desempenho: liga/desliga cada parte ({_bSteps?.Length ?? 8} x {BenchWarm + BenchLen:F0} s, câmera parada; as configurações voltam)")))
                 StartBench();
             if (_bRes != null)
                 foreach (var r in _bRes) if (r != null) GUILayout.Label(r);
