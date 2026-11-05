@@ -51,7 +51,7 @@ Shader "Hidden/NOClouds"
         float _PerHum, _PerIns, _PerCl, _PerCell, _PerWarp, _PerTurb, _PerCb, _PerS, _PerD;
         float _Hum, _Ins, _BaseRef, _BaseVar, _CoverScale, _Cirrus, _MidAmt;
         float _FrontType, _FrontPos, _FrontWidth;   // 0 none, 1 cold, 2 warm; position along the wind (m, relative to _G)
-        float _Density, _Erosion, _Dome, _Billow, _Soft;
+        float _Density, _Erosion, _Dome, _Billow, _Soft, _BaseRough;
         float _Warp, _Turb, _Stretch, _SizeMix, _Anvil, _AnvilShift, _Shear, _Veer;
         float2 _WindDir;
         float _Steps, _LightSteps, _MinStep, _StepGrowth, _MaxStep, _MaxDist;
@@ -62,6 +62,9 @@ Shader "Hidden/NOClouds"
         float _Debug, _Frame, _Jitter, _UseDepth;
         // atmosphere: lightning (camera-relative position + intensity), rain, god rays
         float4 _FlashP; float4 _FlashCol;
+        float _Rainbow, _Glory;
+        // mountain fog: height map around the camera (r terrain, g valley floor, b ridge level; metres above sea)
+        sampler2D _OroTex; float4 _OroC, _OroG, _OroW; float _OroOn, _OroTop, _VFog, _CapFog, _MarchBottom;
         float _RainOn, _RainVis; float3 _WindVel; float _WetDark; float _Deck, _Supercell;
         float2 _SunUV; float _RaysAmt, _RaysOn;
 
@@ -269,6 +272,8 @@ Shader "Hidden/NOClouds"
             float bil = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 
             float d = 0, an = 0, post = 1, wallD = 0;
+            // soft transitions are at least two march steps wide, or they turn into contour bands (slices) at range
+            float bstp = 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep);
 
             // cumulus: cells stretched by the wind, dome, billows
             if (inCu)
@@ -284,7 +289,7 @@ Shader "Hidden/NOClouds"
                 const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), YY = float3(0.25, 0.66, 0.12);
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
-                [unroll] for (int ic = 0; ic < 3; ic++)
+                [loop] for (int ic = 0; ic < 3; ic++)   // not unrolled: keeps the shader compile time down
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
                     float fr = FR[ic] * (ic == 0 ? 1 : saturate(_SizeMix / (ic == 2 ? 0.7 : 0.4)));
@@ -312,7 +317,11 @@ Shader "Hidden/NOClouds"
                         float skn = 1 - q;
                         float Htop = Hc * pow(saturate(1 - q * q), 0.8);           // bell-shaped dome
                         float Fm = Htop - z0 + (bil - 0.48) * _Billow * Hc * 0.5 * saturate(skn * 3);
-                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs);
+                        // underside of THIS cloud: a little above the layer base, curving up toward the edge, soft
+                        // (per cloud, so overlapping clouds do not cut each other into slices)
+                        float lift = _BaseRough * (min(0.12 * Hc, 180) * h2.z + 0.22 * Hc * q * q * q);
+                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs)
+                                 * saturate((z0 - lift) / max((40 + _BaseRough * 0.1 * Hc) * fs, bstp));
                         if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); }
                     }
                 }
@@ -321,9 +330,14 @@ Shader "Hidden/NOClouds"
             if (inSt)
             {
                 float hs = (alt - base) / stTh;
-                float prof = saturate(hs / 0.15) * saturate((1 - hs) / 0.3);
-                float Fs = st * prof + (ns - 0.5) * 0.5 + (bil - 0.48) * 0.25 - 0.3;
-                float ds = saturate(Fs / 0.15) * 0.55;
+                // nearly flat base, lumpy top (stratocumulus): only the top follows the billows, so the deck no longer
+                // bends up and down as a whole like a ribbon; the wide noise only opens gaps and thins the deck a little
+                // the base has its own small waves (0..~140 m, 2-4 km), from a noise unrelated to the top's
+                float bU = saturate(0.6 * t2(rot(x, 2.1) / 2600, 0.27).g + 0.4 * t2(rot(x, -0.8) / 4100, 0.81).b - 0.25) * 200;
+                float fB = saturate((alt - base - bU) / max(80, bstp));
+                float Ft = (1 - hs) * 1.2 + (bil - 0.48) * 1.1 + (s.r - 0.67) * 0.35 + (ns - 0.5) * 0.15 - 0.25;
+                float gap = saturate((st + (ns - 0.5) * 0.6 - 0.35) / 0.2);
+                float ds = saturate(Ft * 1.2 * stTh / max(100, bstp)) * fB * gap * 0.55;
                 if (ds > d) { d = ds; hAmb = hs; }
             }
             // altocumulus / altostratus: mid layer (low coverage = patches; high = sheet)
@@ -360,7 +374,7 @@ Shader "Hidden/NOClouds"
                 float z0 = alt - base;
                 float Hmax = max(_CbTop - base, 1500);
                 float pc = saturate(cb * 1.6);
-                [unroll] for (int kc = 0; kc < 4; kc++)
+                [loop] for (int kc = 0; kc < 4; kc++)   // not unrolled: keeps the shader compile time down
                 {
                     float2 g = cc + oc + float2(kc & 1, kc >> 1);
                     float4 h = hash42(g + 91.3);
@@ -552,16 +566,88 @@ Shader "Hidden/NOClouds"
             return dm;
         }
 
+        // ---------- mountain fog (own layer; the normal clouds are not touched) ----------
+        // valley fog: fills real valleys up to a flat level; upslope cloud: hugs windward slopes/peaks near the cloud base
+        float mountainFog(float3 p, out float hF)
+        {
+            hF = 0;
+            float alt = altOf(p);
+            if (alt > _OroTop) return 0;
+            float2 uv = (p.xz + _OroC.xy) * _OroC.z + 0.5;
+            if (any(uv < 0.02) || any(uv > 0.98)) return 0;
+            float edge = saturate(min(min(uv.x, uv.y), min(1 - uv.x, 1 - uv.y)) * 12 - 0.24);
+            // the game's world is flat and the clouds sit on a sphere: lift the terrain into cloud altitude
+            float curv = dot(p.xz, p.xz) / (2 * _R);
+            float4 T = tex2Dlod(_OroTex, float4(uv, 0, 0)) + float4(curv, curv, curv, 0);
+            float hg = alt - T.r;
+            if (hg < -30) return 0;
+            float2 wx = p.xz + _OroG.xy;   // fixed to the ground (does not drift with the cloud wind)
+            float n1 = t2(wx / 5000, 0.23).r, n2 = t2(wx / 2000, 0.61).g;
+            float stp = max(30, 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep));
+            float d = 0;
+            if (_VFog > 0.002)
+            {
+                float relief = T.b - T.g;
+                float depth = min(relief * 0.45, 40 + 200 * min(_VFog, 1.5)) * saturate((relief - 150) / 250) * saturate((n1 - 0.3) / 0.3);
+                float top = T.g + depth + (n2 - 0.5) * 30;
+                float dv = saturate((top - alt) / stp) * saturate(_VFog * 2) * saturate(depth / 40) * 0.8;
+                if (dv > d) { d = dv; hF = 0.3 + 0.6 * saturate(1 - (top - alt) / max(depth, 1)); }
+            }
+            if (_CapFog > 0.002)
+            {
+                float e = _OroW.z, du = _OroC.z * e;
+                float hx = tex2Dlod(_OroTex, float4(uv + float2(du, 0), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(du, 0), 0, 0)).r;
+                float hz = tex2Dlod(_OroTex, float4(uv + float2(0, du), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(0, du), 0, 0)).r;
+                float up = dot(float2(hx, hz) / (2 * e), _OroW.xy);   // terrain slope along the wind (> 0 = air is lifted)
+                float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+                float base = tex2Dlod(_WxB, float4(uvW, 0, 0)).r * 8000;
+                float lift = saturate(up / 0.1) * saturate((T.r - (base - 700)) / 400);
+                float th = (120 + 280 * lift) * (0.6 + 0.8 * n2);
+                float dc = lift * saturate(_CapFog) * saturate((th - hg) / max(stp, 40)) * saturate((n1 + n2 - 0.7) / 0.4) * 0.8;
+                if (dc > d) { d = dc; hF = saturate(hg / th); }
+            }
+            return d * edge * _Density;
+        }
+
+        // highest cloud top possible over this column (cumulus/stratus, mid layer, Cb), from the weather maps.
+        // A smooth envelope, so the empty air above it can be crossed in long jumps (see fragMarch).
+        float topEnvelope(float3 p)
+        {
+            float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+            if (any(uvW < 0.002) || any(uvW > 0.998)) return 0;
+            float2 su = smoothUV(uvW, _WTS);
+            float4 A = tex2Dlod(_WxA, float4(su, 0, 0));
+            float4 B = tex2Dlod(_WxB, float4(su, 0, 0));
+            float4 C = tex2Dlod(_WxC, float4(su, 0, 0));
+            float base = B.r * 8000, cuTh = A.g * 8000;
+            float mid = max(C.r, _Deck), midBase = lerp(C.b * 8000, max(base + cuTh * 0.6, 2400), _Deck * 0.5);
+            float top = base + max(cuTh * 1.2, 950) + 200;
+            if (mid > 0.01) top = max(top, midBase + (250 + 650 * mid + 1500 * _Deck * _Deck) * 1.3 + 150);
+            if (A.b > 0.003) top = _VolTop;
+            return top;
+        }
+
         float density(float3 p, bool cheap, out float hAmb)
         {
-            if (_NkN < 0.5) return densityBase(p, cheap, hAmb);
-            float boost;
-            float3 p0 = nukeWarp(p, boost);
+            // one densityBase call site only (it is huge: every extra call site multiplies the compile time)
+            bool nk = _NkN >= 0.5;
+            float boost = 1;
+            float3 p0 = p;
+            if (nk) p0 = nukeWarp(p, boost);
             float d = 0; hAmb = 0;
             if (boost > 0.001) d = densityBase(p0, cheap, hAmb) * boost;
-            float hN;
-            float dn = nukeCond(p, hN) * _Density;
-            if (dn > d) { d = dn; hAmb = hN; }
+            if (nk)
+            {
+                float hN;
+                float dn = nukeCond(p, hN) * _Density;
+                if (dn > d) { d = dn; hAmb = hN; }
+            }
+            if (_OroOn > 0.5)
+            {
+                float hF;
+                float df = mountainFog(p, hF);
+                if (df > d) { d = df; hAmb = hF; }
+            }
             return d;
         }
 
@@ -592,7 +678,9 @@ Shader "Hidden/NOClouds"
             float3 q = p + up * (drop + 400) - float3(_WindVel.x, 0, _WindVel.z) * (drop / 9);
             float hA;
             // two heights averaged: the eroded cloud edge alone made the mask flicker on and off (speckles)
-            float dB = 0.5 * (densityBase(q, true, hA) + densityBase(q + up * 500, true, hA)) / max(_Density, 1e-4);
+            float dB = 0;
+            [loop] for (int kr = 0; kr < 2; kr++) dB += densityBase(q + up * (500 * kr), true, hA);   // one call site
+            dB *= 0.5 / max(_Density, 1e-4);
             // far away the march steps are km long: wider, softer mask so it does not turn into speckled drizzle
             float far = saturate(length(p) / 12000);
             // curtain like the reference photos: thin, almost vertical streaks (slightly slanted with height)
@@ -631,6 +719,33 @@ Shader "Hidden/NOClouds"
         {
             float2 h = sph(_SunDir, _PlanetC - p, _R - 300);
             return (h.y > h.x && h.x > 0) ? 1 : 0;
+        }
+        // ---------- optics of water drops ----------
+        // rainbow, by angle from the antisolar point (deg): primary ~42 deg (red outside), secondary ~51 deg (reversed, ~43%),
+        // brighter sky inside the primary; Alexander's dark band in between is simply what is left
+        float3 bowCol(float th)
+        {
+            float3 a = (th - float3(42.3, 41.6, 40.8)) / 0.55;
+            float3 b = (th - float3(50.3, 51.1, 52.0)) / 0.8;
+            return exp(-a * a) + 0.43 * exp(-b * b) + 0.06 * smoothstep(28, 40.5, th) * step(th, 41.5);
+        }
+        // glory: coloured rings a few degrees around the antisolar point (red rings wider) + white cloudbow ~41 deg
+        float3 gloryCol(float th)
+        {
+            float3 r = 0.5 + 0.5 * cos(6.2832 * th / float3(2.6, 2.25, 1.95));
+            float3 g = exp(-th / 4) * (0.6 * r + 0.4 * exp(-th * th / 1.5)) * step(th, 15);
+            float3 c = (th - float3(41.2, 40.3, 39.5)) / 2.5;
+            return g + 0.15 * exp(-c * c);
+        }
+        // the sun reaches this point (opacity depth map; outside the map: no, so effects that need it stay rare)
+        float sunLitMap(float3 p)
+        {
+            if (_ShDOn < 0.5) return 0;
+            float3 d0 = p - _ShO;
+            float2 uv = float2(dot(d0, _ShR) / dot(_ShR, _ShR), dot(d0, _ShU) / dot(_ShU, _ShU));
+            if (!(all(uv > 0.01) && all(uv < 0.99))) return 0;
+            float sh = tex2Dlod(_NOCShD, float4(uv, 0, 0)).r;
+            return (1 - saturate((sh - dot(d0, normalize(_SunDir))) / 300)) * (1 - planetShadow(p));
         }
         float lightMarch(float3 p)
         {
@@ -727,7 +842,7 @@ Shader "Hidden/NOClouds"
             }
 
             float2 outer = sph(rd, _PlanetC, _R + _VolTop);
-            float2 inner = sph(rd, _PlanetC, _R + _Bottom);
+            float2 inner = sph(rd, _PlanetC, _R + _MarchBottom);   // 200 m, lower only while mountain fog is on
             float camAlt = length(_PlanetC) - _R;
             float T = 1;
             float3 col = 0;
@@ -739,7 +854,7 @@ Shader "Hidden/NOClouds"
                 t1 = outer.y;
                 if (inner.y > inner.x)
                 {
-                    if (camAlt < _Bottom) t0 = max(t0, inner.y);
+                    if (camAlt < _MarchBottom) t0 = max(t0, inner.y);
                     else if (inner.x > 0) t1 = min(t1, inner.x);
                 }
                 t1 = min(min(t1, sceneT), _MaxDist);
@@ -773,6 +888,13 @@ Shader "Hidden/NOClouds"
                         // water-laden cloud: dark underneath and on the sides (sunlit top stays bright)
                         float wd = min(wetness(p), 1) * _WetDark * pow(1 - 0.9 * saturate(hA), 1.5);
                         float3 S = _SunCol.rgb * L * powder * 12.566 * exp(-wd * 1.2) + lerp(_AmbBottom.rgb, _AmbTop.rgb, hh) * ao * lerp(1, 0.5, saturate(wd));
+                        // glory/cloudbow: only on the sunlit top of water clouds close below you (fades by ~8 km); rare by geometry
+                        if (_Glory > 0 && cosT < -0.6)
+                        {
+                            float thg = degrees(acos(saturate(-cosT)));
+                            float gw = saturate(hA * 3 - 1.5) * saturate((8000 - t) / 4000) * saturate((camAlt - altOf(p) - 100) / 300);
+                            if (gw > 0) S += _SunCol.rgb * gloryCol(thg) * (exp(-tauL) * 0.45 * _Glory * gw);
+                        }
                         if (_FlashP.w > 0)   // lightning: the cloud lights up from inside around the flash
                         {
                             float fd = length(p - _FlashP.xyz);
@@ -793,7 +915,22 @@ Shader "Hidden/NOClouds"
                         fine = 2;
                     }
                     else if (fine > 0) { t += stp; fine--; }
-                    else { t += stp * 2; skipped = true; }
+                    else
+                    {
+                        // empty air: far above every possible cloud top (e.g. flying at 7 km) jump straight down to
+                        // near it, otherwise the steps ran out before reaching distant clouds (a ring of clouds around you)
+                        float sk = stp * 2;
+                        if (_NkN < 0.5)
+                        {
+                            float clr = altOf(p) - topEnvelope(p);
+                            if (clr > 150)
+                            {
+                                float dn = max(0, -dot(rd, normalize(p - _PlanetC)));
+                                sk = max(sk, min((clr - 100) / (dn + 0.25), 4000));
+                            }
+                        }
+                        t += sk; skipped = true;
+                    }
                 }
             }
 
@@ -803,6 +940,8 @@ Shader "Hidden/NOClouds"
                 float tEnd = min(min(sceneT, 45000), _MaxDist);
                 float rT = 1; float3 rc = 0;
                 const int RN = 36;
+                float thb = degrees(acos(clamp(-dot(rd, normalize(_SunDir)), -1, 1)));
+                bool bowOn = _Rainbow > 0 && thb > 39 && thb < 55;
                 float jr = 0.5;   // same steps for every pixel: per-pixel jitter turned the curtains into bright speckles
                 float tr0 = 0;
                 [loop] for (int r = 0; r < RN; r++)
@@ -822,6 +961,8 @@ Shader "Hidden/NOClouds"
                     float3 lc = lerp(_AmbBottom.rgb, _AmbTop.rgb, saturate(bse / 2500)) * lerp(1, 0.25, saturate(_ShDark * 1.4)) * lerp(1, 0.5, saturate(_WetDark))
                               + _SunCol.rgb * 0.01 * (1 - planetShadow(p));   // same colour as the darkest (wet) cloud base
                     if (_FlashP.w > 0) lc += _FlashCol.rgb * _FlashP.w * 0.5 * exp(-length(p - _FlashP.xyz) / 2500);
+                    // rainbow: needs heavy rain (big drops) that the sun actually reaches, at ~42/51 deg from the antisolar point
+                    if (bowOn) lc += _SunCol.rgb * bowCol(thb) * (0.3 * _Rainbow * saturate((rr - 0.15) / 0.3) * sunLitMap(p));
                     rc += rT * lc * (1 - trn);
                     rT *= trn;
                     if (rT < 0.02) break;

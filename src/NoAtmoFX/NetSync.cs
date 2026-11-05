@@ -43,6 +43,10 @@ namespace NoAtmoFX
         readonly HashSet<INetworkPlayer> _modPlayers = new HashSet<INetworkPlayer>();
         bool _helloSent; int _hellos; float _helloT = -100, _stateT, _cfgCheckT; bool _saveFlag = true;
         internal bool HostHasMod; internal float LastHostMsg = -100;
+        internal bool HostLive => Shared && IsClientOnly && HostHasMod && Time.time - LastHostMsg < 30f;
+        // weather input other mods gave the host (integration API); replaces the client's own while the host is live
+        internal NoAtmoFXApi.WeatherInput HostInput = NoAtmoFXApi.WeatherInput.None; internal bool HostInputValid;
+        byte[] _lastInputSent;
         internal string Status = "";
 
         // host state to blend in (client)
@@ -104,7 +108,7 @@ namespace NoAtmoFX
         void Leave()
         {
             RestoreSettings();
-            _modPlayers.Clear(); _helloSent = false; _hellos = 0; _haveHost = false; HostHasMod = false; LastHostMsg = -100; _lastCfgSent = null;
+            _modPlayers.Clear(); _helloSent = false; HostInputValid = false; HostInput = NoAtmoFXApi.WeatherInput.None; _lastInputSent = null; _hellos = 0; _haveHost = false; HostHasMod = false; LastHostMsg = -100; _lastCfgSent = null;
         }
 
         // ---------------- networking ----------------
@@ -127,6 +131,10 @@ namespace NoAtmoFX
                     string cfg = HostSettings();
                     if (_lastCfgSent != null && cfg != _lastCfgSent) foreach (var pl in _modPlayers) SendSettings(pl, cfg);
                     _lastCfgSent = cfg;
+                    // weather input from other mods changed: send the state now, not in up to 10 s
+                    var ms = new MemoryStream(); NoAtmoFXApi.LocalInput.Write(new BinaryWriter(ms)); var cur = ms.ToArray();
+                    if (_lastInputSent != null && !Same(cur, _lastInputSent)) { _stateT = Time.time; foreach (var pl in _modPlayers) SendState(pl, false); }
+                    _lastInputSent = cur;
                 }
             }
             else if (IsClientOnly)
@@ -144,6 +152,13 @@ namespace NoAtmoFX
                     c.Send(new NoAtmoFXMsg { kind = HELLO, data = BitConverter.GetBytes(PROTO) });
                 }
             }
+        }
+
+        static bool Same(byte[] a, byte[] b)
+        {
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
         }
 
         static bool IsConnected(NetworkServer s, INetworkPlayer pl)
@@ -278,6 +293,8 @@ namespace NoAtmoFX
             w.Write(_p._windX); w.Write(_p._windZ); w.Write(_p._evolveT);
             w.Write(_p._windS.x); w.Write(_p._windS.z);
             w.Write(_p._condS); w.Write(_p._baseS); w.Write(_p._heatS); w.Write(_p._Hs); w.Write(_p._Is); w.Write(_p._frontAmt); w.Write(_p._front);
+            // appended in 1.3.0 (older clients stop reading before it): the host's integration-API weather input
+            w.Write((byte)1); NoAtmoFXApi.LocalInput.Write(w);
             pl.Send(new NoAtmoFXMsg { kind = STATE, data = ms.ToArray() });
             if (full && _p.Nukes != null) pl.Send(new NoAtmoFXMsg { kind = NUKE, data = _p.Nukes.Pack(T, true) });
         }
@@ -289,6 +306,8 @@ namespace NoAtmoFX
             _hT = r.ReadDouble(); _hWx = r.ReadDouble(); _hWz = r.ReadDouble(); _hEv = r.ReadDouble();
             _hWs = new Vector3(r.ReadSingle(), 0, r.ReadSingle());
             _hCond = r.ReadSingle(); _hBase = r.ReadSingle(); _hHeat = r.ReadSingle(); _hH = r.ReadSingle(); _hI = r.ReadSingle(); _hFrontAmt = r.ReadSingle(); _hFront = r.ReadInt32();
+            if (r.BaseStream.Position < r.BaseStream.Length && r.ReadByte() == 1) { HostInput = NoAtmoFXApi.WeatherInput.Read(r); HostInputValid = true; }
+            else HostInputValid = false;   // host with an older NoAtmoFX
             _haveHost = true;
             if (full) _snapNext = true;
         }

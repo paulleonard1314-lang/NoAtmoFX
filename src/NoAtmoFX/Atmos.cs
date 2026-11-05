@@ -159,6 +159,7 @@ namespace NoAtmoFX
             _light.transform.position = _flashW;
             _light.range = 14000f;
             if (ground) Bolt(_flashW, seaY, dist);
+            NoAtmoFXApi.RaiseLightning(_flashW, ground);
             Thunder(_flashW, cp, dist, ground);
         }
 

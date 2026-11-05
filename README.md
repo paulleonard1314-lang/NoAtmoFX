@@ -83,6 +83,10 @@ In multiplayer every player with NoAtmoFX sees the same clouds in the same place
 
 NoAtmoFX works with or without the Nuclear Rain mod. When Nuclear Rain is installed, rain on the canopy follows it and the rain around the camera is turned off so it is not doubled. Without it, NoAtmoFX uses its own rain under its own clouds. Either behaviour can be forced with *Glass > RainSource* and *Atmosphere > NearRain*.
 
+## For mod authors
+
+Other mods can switch NoAtmoFX and its effects, feed it weather and read its state through a small public API, with or without referencing the DLL. See [INTEGRATION.md](INTEGRATION.md).
+
 ## Known limitations
 
 - Multiplayer: clouds match between players, but hiding in a cloud only hides you on your own screen (radar and IR use the game's cloud layer). Lightning flashes are random for each player.

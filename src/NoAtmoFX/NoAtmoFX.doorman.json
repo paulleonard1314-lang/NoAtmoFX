@@ -1,0 +1,11 @@
+{
+  "plugin": "paul.no.clouds",
+  "name": "NoAtmoFX",
+  "author": "Paulleonard (scarface)",
+  "description": "This mod will completely remake the Nuclear Option atmosphere, including clouds of all types, from fair-weather cumulus to full overcast and towering thunderstorms. Everything follows the mission weather and changes slowly as you fly, with fronts, rain, lightning, cloud shadows, light shafts and a wet canopy. Even nuclear blasts tear a hole through the clouds and leave condensation rings around the mushroom cloud. Install the whole zip (DLL and the noatmofx bundle).",
+  "links": [
+    { "label": "GitHub", "url": "https://github.com/paulleonard1314-lang/NoAtmoFX" },
+    { "label": "Releases", "url": "https://github.com/paulleonard1314-lang/NoAtmoFX/releases" }
+  ],
+  "update": { "repository": "paulleonard1314-lang/NoAtmoFX", "asset": "NoAtmoFX_*.zip" }
+}

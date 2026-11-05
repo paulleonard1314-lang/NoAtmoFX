@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <OutputPath>bin/</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <NoStdLib>true</NoStdLib>
@@ -25,6 +25,10 @@
     <Compile Include="NetSync.cs" />
     <Compile Include="ShaderIDs.cs" />
     <Compile Include="Perf.cs" />
+    <Compile Include="Api.cs" />
+    <Compile Include="Boscali.cs" />
+    <Compile Include="MountainFog.cs" />
+    <EmbeddedResource Include="NoAtmoFX.doorman.json" LogicalName="doorman.json" />
     <Reference Include="mscorlib"><HintPath>$(M)/mscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="netstandard"><HintPath>$(M)/netstandard.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System"><HintPath>$(M)/System.dll</HintPath><Private>false</Private></Reference>
