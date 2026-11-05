@@ -284,6 +284,8 @@ Shader "Hidden/NOClouds"
                 const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), YY = float3(0.25, 0.66, 0.12);
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
+                // the underside fades over at least two march steps here, or it turns into contour bands (slices) at range
+                float bstp = 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep);
                 [loop] for (int ic = 0; ic < 3; ic++)   // not unrolled: keeps the shader compile time down
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
@@ -316,7 +318,7 @@ Shader "Hidden/NOClouds"
                         // (per cloud, so overlapping clouds do not cut each other into slices)
                         float lift = _BaseRough * (min(0.12 * Hc, 180) * h2.z + 0.22 * Hc * q * q * q);
                         float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs)
-                                 * saturate((z0 - lift) / ((20 + _BaseRough * 0.05 * Hc) * fs));
+                                 * saturate((z0 - lift) / max((40 + _BaseRough * 0.1 * Hc) * fs, bstp));
                         if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); }
                     }
                 }
