@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 (unreleased)
+
+Faster raymarch, same look. Needs the new shader bundle (with the old bundle the DLL simply skips the new parts).
+
+- Empty-space skipping (*Quality > EmptySkip*, on): a 512x512 map of how far each spot is from the nearest place a cloud could be (cumulus cells grown by the largest billow, warp and turbulence, plus every column with stratus, mid layer or cumulonimbus), turned into distances by a jump flood. The raymarch jumps over clear air between clouds instead of walking through it. The map is conservative, so no cloud is cut. Mountain fog: jumps only above its top. Nuclear blasts: jumps stay outside the shock front and the ring discs instead of being switched off everywhere for 20 minutes.
+- Cheaper sunlight where it cannot be told apart (*Quality > LightLOD*, on in Low/Medium/High, off in Ultra): beyond ~18-28 km and deep inside a cloud (less than ~25% of the view left), half the light samples (same total length) and no fine detail. Dithered, so there is no visible line.
+- The benchmark gains a step with both off.
+- Blasts below 50 t are ignored (conventional bombs with a mushroom effect made the clouds several times slower for 20 minutes) (1.3.1).
+
 ## 1.3.0 (unreleased)
 
 Integration API for other mods (effects packs, weather systems). See [INTEGRATION.md](INTEGRATION.md). Only the plugin DLL changes; without another mod nothing behaves differently.

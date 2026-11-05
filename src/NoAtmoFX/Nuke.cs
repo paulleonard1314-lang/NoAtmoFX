@@ -17,6 +17,7 @@ namespace NoAtmoFX
     class NOCNukes
     {
         const int MAX = 4;
+        const float MushroomFloorKt = 0.05f;   // smaller blasts never touch the clouds, mushroom effect or not
         readonly NOCloudsPlugin _p;
         internal static NOCNukes I;
 
@@ -122,6 +123,10 @@ namespace NoAtmoFX
                     cap = fr?.GetValue(cl) as Renderer;
                 }
                 if (mc == null && kt < MinYield.Value) { NOCloudsPlugin.Log.LogInfo($"Nuclear: blast of {kt * 1000:F1} t ignored (no mushroom cloud, below MinYield)."); return; }
+                // conventional bombs of a few tons can carry a small mushroom effect: their hole is ~100 m and
+                // invisible, but every registered blast costs each cloud sample for Duration minutes (and switches
+                // off the empty-air skip), so they made the clouds several times slower for 20 minutes
+                if (kt < MushroomFloorKt) { NOCloudsPlugin.Log.LogInfo($"Nuclear: blast of {kt * 1000:F1} t ignored (below {MushroomFloorKt * 1000:F0} t)."); return; }
             }
             Vector3 g0 = world - Datum.originPosition;
             var sy = _p.Sync;
@@ -180,7 +185,7 @@ namespace NoAtmoFX
             {
                 var g = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()); float kt = r.ReadSingle();
                 double wx = r.ReadDouble(), wz = r.ReadDouble(), tm = r.ReadDouble(); int seed = r.ReadInt32(); double age = r.ReadDouble();
-                if (!On.Value || age > Duration.Value * 60f) continue;
+                if (!On.Value || age > Duration.Value * 60f || kt < MushroomFloorKt) continue;
                 var have = Near(g, tm);
                 if (have != null) { have.wx = wx; have.wz = wz; continue; }   // seen here too: take the host's drift anchor
                 var b = New(g, kt, wx, wz, tm, seed, (float)Math.Max(0, age));
