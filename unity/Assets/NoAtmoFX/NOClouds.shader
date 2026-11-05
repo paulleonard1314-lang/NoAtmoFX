@@ -62,6 +62,7 @@ Shader "Hidden/NOClouds"
         float _Debug, _Frame, _Jitter, _UseDepth;
         // atmosphere: lightning (camera-relative position + intensity), rain, god rays
         float4 _FlashP; float4 _FlashCol;
+        float _Rainbow, _Glory;
         float _RainOn, _RainVis; float3 _WindVel; float _WetDark; float _Deck, _Supercell;
         float2 _SunUV; float _RaysAmt, _RaysOn;
 
@@ -650,6 +651,33 @@ Shader "Hidden/NOClouds"
             float2 h = sph(_SunDir, _PlanetC - p, _R - 300);
             return (h.y > h.x && h.x > 0) ? 1 : 0;
         }
+        // ---------- optics of water drops ----------
+        // rainbow, by angle from the antisolar point (deg): primary ~42 deg (red outside), secondary ~51 deg (reversed, ~43%),
+        // brighter sky inside the primary; Alexander's dark band in between is simply what is left
+        float3 bowCol(float th)
+        {
+            float3 a = (th - float3(42.3, 41.6, 40.8)) / 0.55;
+            float3 b = (th - float3(50.3, 51.1, 52.0)) / 0.8;
+            return exp(-a * a) + 0.43 * exp(-b * b) + 0.06 * smoothstep(28, 40.5, th) * step(th, 41.5);
+        }
+        // glory: coloured rings a few degrees around the antisolar point (red rings wider) + white cloudbow ~41 deg
+        float3 gloryCol(float th)
+        {
+            float3 r = 0.5 + 0.5 * cos(6.2832 * th / float3(2.6, 2.25, 1.95));
+            float3 g = exp(-th / 4) * (0.6 * r + 0.4 * exp(-th * th / 1.5)) * step(th, 15);
+            float3 c = (th - float3(41.2, 40.3, 39.5)) / 2.5;
+            return g + 0.15 * exp(-c * c);
+        }
+        // the sun reaches this point (opacity depth map; outside the map: no, so effects that need it stay rare)
+        float sunLitMap(float3 p)
+        {
+            if (_ShDOn < 0.5) return 0;
+            float3 d0 = p - _ShO;
+            float2 uv = float2(dot(d0, _ShR) / dot(_ShR, _ShR), dot(d0, _ShU) / dot(_ShU, _ShU));
+            if (!(all(uv > 0.01) && all(uv < 0.99))) return 0;
+            float sh = tex2Dlod(_NOCShD, float4(uv, 0, 0)).r;
+            return (1 - saturate((sh - dot(d0, normalize(_SunDir))) / 300)) * (1 - planetShadow(p));
+        }
         float lightMarch(float3 p)
         {
             if (planetShadow(p) > 0.5) return 50;
@@ -791,6 +819,13 @@ Shader "Hidden/NOClouds"
                         // water-laden cloud: dark underneath and on the sides (sunlit top stays bright)
                         float wd = min(wetness(p), 1) * _WetDark * pow(1 - 0.9 * saturate(hA), 1.5);
                         float3 S = _SunCol.rgb * L * powder * 12.566 * exp(-wd * 1.2) + lerp(_AmbBottom.rgb, _AmbTop.rgb, hh) * ao * lerp(1, 0.5, saturate(wd));
+                        // glory/cloudbow: only on the sunlit top of water clouds close below you (fades by ~8 km); rare by geometry
+                        if (_Glory > 0 && cosT < -0.6)
+                        {
+                            float thg = degrees(acos(saturate(-cosT)));
+                            float gw = saturate(hA * 3 - 1.5) * saturate((8000 - t) / 4000) * saturate((camAlt - altOf(p) - 100) / 300);
+                            if (gw > 0) S += _SunCol.rgb * gloryCol(thg) * (exp(-tauL) * 0.45 * _Glory * gw);
+                        }
                         if (_FlashP.w > 0)   // lightning: the cloud lights up from inside around the flash
                         {
                             float fd = length(p - _FlashP.xyz);
@@ -821,6 +856,8 @@ Shader "Hidden/NOClouds"
                 float tEnd = min(min(sceneT, 45000), _MaxDist);
                 float rT = 1; float3 rc = 0;
                 const int RN = 36;
+                float thb = degrees(acos(clamp(-dot(rd, normalize(_SunDir)), -1, 1)));
+                bool bowOn = _Rainbow > 0 && thb > 39 && thb < 55;
                 float jr = 0.5;   // same steps for every pixel: per-pixel jitter turned the curtains into bright speckles
                 float tr0 = 0;
                 [loop] for (int r = 0; r < RN; r++)
@@ -840,6 +877,8 @@ Shader "Hidden/NOClouds"
                     float3 lc = lerp(_AmbBottom.rgb, _AmbTop.rgb, saturate(bse / 2500)) * lerp(1, 0.25, saturate(_ShDark * 1.4)) * lerp(1, 0.5, saturate(_WetDark))
                               + _SunCol.rgb * 0.01 * (1 - planetShadow(p));   // same colour as the darkest (wet) cloud base
                     if (_FlashP.w > 0) lc += _FlashCol.rgb * _FlashP.w * 0.5 * exp(-length(p - _FlashP.xyz) / 2500);
+                    // rainbow: needs heavy rain (big drops) that the sun actually reaches, at ~42/51 deg from the antisolar point
+                    if (bowOn) lc += _SunCol.rgb * bowCol(thb) * (0.3 * _Rainbow * saturate((rr - 0.15) / 0.3) * sunLitMap(p));
                     rc += rT * lc * (1 - trn);
                     rT *= trn;
                     if (rT < 0.02) break;

@@ -51,7 +51,7 @@ namespace NoAtmoFX
         public static readonly string[] Features =
         {
             "Clouds", "Shadows", "RainShafts", "NearRain", "Lightning", "Turbulence",
-            "GodRays", "LightShafts", "Fog", "WetGlass", "NuclearClouds", "KeepSun"
+            "GodRays", "LightShafts", "Fog", "WetGlass", "NuclearClouds", "KeepSun", "Rainbow", "Glory"
         };
 
         /// <summary>Turns one effect on or off. Strength effects (Lightning, GodRays...) go back to the player's

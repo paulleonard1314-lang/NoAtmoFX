@@ -117,6 +117,7 @@ namespace NoAtmoFX
         internal static readonly int _RainVelRel = Shader.PropertyToID("_RainVelRel");
         internal static readonly int _RainVelW = Shader.PropertyToID("_RainVelW");
         internal static readonly int _RainVis = Shader.PropertyToID("_RainVis");
+        internal static readonly int _Rainbow = Shader.PropertyToID("_Rainbow"), _Glory = Shader.PropertyToID("_Glory");
         internal static readonly int _RaysAmt = Shader.PropertyToID("_RaysAmt");
         internal static readonly int _Refract = Shader.PropertyToID("_Refract");
         internal static readonly int _SceneTex = Shader.PropertyToID("_SceneTex");

@@ -56,7 +56,7 @@ public static class NoAtmoFXBridge
     // ---- switch / features (persist = write to the player's NoAtmoFX config) ----
     public static void SetEnabled(bool on, bool persist = true) => Call("SetEnabled", on, persist);
     public static bool IsEnabled => Get<bool>("IsEnabled");
-    /// <summary>Clouds, Shadows, RainShafts, NearRain, Lightning, Turbulence, GodRays, LightShafts, Fog, WetGlass, NuclearClouds, KeepSun</summary>
+    /// <summary>Clouds, Shadows, RainShafts, NearRain, Lightning, Turbulence, GodRays, LightShafts, Fog, WetGlass, NuclearClouds, KeepSun, Rainbow, Glory</summary>
     public static bool SetFeature(string name, bool on, bool persist = true) => Call("SetFeature", name, on, persist) is bool b && b;
     public static bool GetFeature(string name) => Call("GetFeature", name) is bool b && b;
 

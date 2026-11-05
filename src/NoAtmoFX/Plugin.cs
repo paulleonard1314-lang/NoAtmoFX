@@ -33,7 +33,7 @@ namespace NoAtmoFX
         internal NOCWetGlass Wet; WetGlassPass _gpass; AssetBundle _ab;
         internal NOCNukes Nukes; internal NOCAtmos Atmos; AtmosPass _apass; internal bool RaysActive, ShaftsActive; internal int DownscaleNow = 2; internal RenderTexture CbRT, ReflCloudRT; internal Vector2 GDLast;
         internal float ProbeCloudAt, ProbeTauAt; internal bool ProbeAtValid;
-        ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
+        ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atRainbow, _atGlory, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
         internal RenderTexture ProbeRT;
         // Layer
         ConfigEntry<float> _baseOffset, _manualBase, _planetR;
@@ -220,6 +220,8 @@ namespace NoAtmoFX
             { "Glass/TestMode", "Teste: 0 = normal, 1 = nuvem (gotas), 2 = nuvem congelada (geada), 3 = chuva." },
             { "Atmosphere/NearRain", "Chuva caindo perto da câmera: 0 = automático (desliga se o Nuclear Rain estiver instalado), 1 = sempre, 2 = nunca." },
             { "Atmosphere/RainShafts", "Cortinas de chuva debaixo dos cúmulos-nimbos e cúmulos grossos (visíveis de longe)." },
+            { "Atmosphere/Rainbow", "Arco-íris (principal + secundário) nas cortinas de chuva iluminadas. Raro de propósito: só com chuva de verdade, sol atrás de você e no ângulo certo. 0 = desliga." },
+            { "Atmosphere/Glory", "Glória (anéis coloridos em volta do ponto oposto ao sol) e arco branco no topo de nuvens iluminadas logo abaixo de você. Raro de propósito. 0 = desliga." },
             { "Atmosphere/RainDensity", "Quanto a chuva tira a visibilidade (cortinas)." },
             { "Atmosphere/Lightning", "Relâmpagos nos cúmulos-nimbos (0 = desliga; maior = mais frequentes/fortes)." },
             { "Atmosphere/Turbulence", "Turbulência dentro das nuvens (0 = desliga). Cúmulo-nimbo sacode bem mais." },
@@ -415,6 +417,8 @@ namespace NoAtmoFX
             _atNearRain = C.Bind("Atmosphere", "NearRain", 0, new ConfigDescription("Rain falling near the camera: 0 = automatic (off if Nuclear Rain is installed), 1 = always, 2 = never.", Ri(0, 2)));
             _atShafts = C.Bind("Atmosphere", "RainShafts", true, "Rain curtains under cumulonimbus (visible from afar).");
             _atRainVis = C.Bind("Atmosphere", "RainDensity", 1f, new ConfigDescription("How much rain reduces visibility (curtains).", R(0.2f, 3)));
+            _atRainbow = C.Bind("Atmosphere", "Rainbow", 1f, new ConfigDescription("Rainbow (primary + secondary bow) in sunlit rain curtains. Rare on purpose: only real rain, lit by a sun behind you, at the right angle. 0 = off.", R(0, 2)));
+            _atGlory = C.Bind("Atmosphere", "Glory", 1f, new ConfigDescription("Glory (coloured rings around the antisolar point) and white cloudbow on sunlit cloud tops close below you. Rare on purpose. 0 = off.", R(0, 2)));
             _atLightning = C.Bind("Atmosphere", "Lightning", 1f, new ConfigDescription("Lightning in cumulonimbus (0 = off; higher = more frequent/stronger).", R(0, 3)));
             _atTurb = C.Bind("Atmosphere", "Turbulence", 1f, new ConfigDescription("Turbulence inside clouds (0 = off). Cumulonimbus shake much more.", R(0, 3)));
             _atRays = C.Bind("Atmosphere", "GodRays", 0.35f, new ConfigDescription("Screen-space sun rays between clouds (0 = off).", R(0, 1.5f)));
@@ -889,6 +893,8 @@ namespace NoAtmoFX
                 case "wetglass": return _wgOn;
                 case "nuclearclouds": return Nukes?.On;
                 case "keepsun": return _keepSun;
+                case "rainbow": return _atRainbow;
+                case "glory": return _atGlory;
             }
             return null;
         }
@@ -1096,6 +1102,7 @@ namespace NoAtmoFX
             // atmosphere
             m.SetFloat(ID._RainOn, _atShafts.Value && (_H > 0.55f || _I > 0.5f || _front != 0) ? 1f : 0f);
             m.SetFloat(ID._RainVis, _atRainVis.Value);
+            m.SetFloat(ID._Rainbow, _atRainbow.Value); m.SetFloat(ID._Glory, _atGlory.Value);
             m.SetFloat(ID._WetDark, _wetDark.Value);
             // overcast deck: from "cloudy" to "storm" (smoothed conditions)
             m.SetFloat(ID._Deck, Mathf.Clamp01(Mathf.InverseLerp(0.55f, 0.85f, _condS)) * _deck.Value);
