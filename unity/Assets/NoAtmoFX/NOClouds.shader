@@ -285,7 +285,7 @@ Shader "Hidden/NOClouds"
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
                 float bq = 0, bH = 0, bz = 0;   // the densest cloud here: for its underside below
-                [unroll] for (int ic = 0; ic < 3; ic++)
+                [loop] for (int ic = 0; ic < 3; ic++)   // not unrolled: keeps the shader compile time down
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
                     float fr = FR[ic] * (ic == 0 ? 1 : saturate(_SizeMix / (ic == 2 ? 0.7 : 0.4)));
@@ -369,7 +369,7 @@ Shader "Hidden/NOClouds"
                 float z0 = alt - base;
                 float Hmax = max(_CbTop - base, 1500);
                 float pc = saturate(cb * 1.6);
-                [unroll] for (int kc = 0; kc < 4; kc++)
+                [loop] for (int kc = 0; kc < 4; kc++)   // not unrolled: keeps the shader compile time down
                 {
                     float2 g = cc + oc + float2(kc & 1, kc >> 1);
                     float4 h = hash42(g + 91.3);
@@ -563,14 +563,19 @@ Shader "Hidden/NOClouds"
 
         float density(float3 p, bool cheap, out float hAmb)
         {
-            if (_NkN < 0.5) return densityBase(p, cheap, hAmb);
-            float boost;
-            float3 p0 = nukeWarp(p, boost);
+            // one densityBase call site only (it is huge: every extra call site multiplies the compile time)
+            bool nk = _NkN >= 0.5;
+            float boost = 1;
+            float3 p0 = p;
+            if (nk) p0 = nukeWarp(p, boost);
             float d = 0; hAmb = 0;
             if (boost > 0.001) d = densityBase(p0, cheap, hAmb) * boost;
-            float hN;
-            float dn = nukeCond(p, hN) * _Density;
-            if (dn > d) { d = dn; hAmb = hN; }
+            if (nk)
+            {
+                float hN;
+                float dn = nukeCond(p, hN) * _Density;
+                if (dn > d) { d = dn; hAmb = hN; }
+            }
             return d;
         }
 
@@ -601,7 +606,9 @@ Shader "Hidden/NOClouds"
             float3 q = p + up * (drop + 400) - float3(_WindVel.x, 0, _WindVel.z) * (drop / 9);
             float hA;
             // two heights averaged: the eroded cloud edge alone made the mask flicker on and off (speckles)
-            float dB = 0.5 * (densityBase(q, true, hA) + densityBase(q + up * 500, true, hA)) / max(_Density, 1e-4);
+            float dB = 0;
+            [loop] for (int kr = 0; kr < 2; kr++) dB += densityBase(q + up * (500 * kr), true, hA);   // one call site
+            dB *= 0.5 / max(_Density, 1e-4);
             // far away the march steps are km long: wider, softer mask so it does not turn into speckled drizzle
             float far = saturate(length(p) / 12000);
             // curtain like the reference photos: thin, almost vertical streaks (slightly slanted with height)
