@@ -609,6 +609,24 @@ Shader "Hidden/NOClouds"
             return d * edge * _Density;
         }
 
+        // highest cloud top possible over this column (cumulus/stratus, mid layer, Cb), from the weather maps.
+        // A smooth envelope, so the empty air above it can be crossed in long jumps (see fragMarch).
+        float topEnvelope(float3 p)
+        {
+            float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+            if (any(uvW < 0.002) || any(uvW > 0.998)) return 0;
+            float2 su = smoothUV(uvW, _WTS);
+            float4 A = tex2Dlod(_WxA, float4(su, 0, 0));
+            float4 B = tex2Dlod(_WxB, float4(su, 0, 0));
+            float4 C = tex2Dlod(_WxC, float4(su, 0, 0));
+            float base = B.r * 8000, cuTh = A.g * 8000;
+            float mid = max(C.r, _Deck), midBase = lerp(C.b * 8000, max(base + cuTh * 0.6, 2400), _Deck * 0.5);
+            float top = base + max(cuTh * 1.2, 950) + 200;
+            if (mid > 0.01) top = max(top, midBase + (250 + 650 * mid + 1500 * _Deck * _Deck) * 1.3 + 150);
+            if (A.b > 0.003) top = _VolTop;
+            return top;
+        }
+
         float density(float3 p, bool cheap, out float hAmb)
         {
             // one densityBase call site only (it is huge: every extra call site multiplies the compile time)
@@ -897,7 +915,22 @@ Shader "Hidden/NOClouds"
                         fine = 2;
                     }
                     else if (fine > 0) { t += stp; fine--; }
-                    else { t += stp * 2; skipped = true; }
+                    else
+                    {
+                        // empty air: far above every possible cloud top (e.g. flying at 7 km) jump straight down to
+                        // near it, otherwise the steps ran out before reaching distant clouds (a ring of clouds around you)
+                        float sk = stp * 2;
+                        if (_NkN < 0.5)
+                        {
+                            float clr = altOf(p) - topEnvelope(p);
+                            if (clr > 150)
+                            {
+                                float dn = max(0, -dot(rd, normalize(p - _PlanetC)));
+                                sk = max(sk, min((clr - 100) / (dn + 0.25), 4000));
+                            }
+                        }
+                        t += sk; skipped = true;
+                    }
                 }
             }
 
