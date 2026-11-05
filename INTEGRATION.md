@@ -102,6 +102,27 @@ Feature names: `Clouds`, `Shadows`, `RainShafts`, `NearRain`, `Lightning`, `Turb
 non-zero value when switched back on. `persist: true` (default) writes the player's NoAtmoFX config, like the
 F11 menu; use `false` for temporary changes. Switching is immediate.
 
+### Quality presets
+
+```csharp
+string[] names = NoAtmoFXBridge.Presets;          // "Low", "Medium", "High", "Ultra"
+NoAtmoFXBridge.SetPreset("High");                 // immediate; persist: false for a temporary change
+string now = NoAtmoFXBridge.CurrentPreset;        // one of the above, or "Custom"
+NoAtmoFXBridge.OnPresetChanged(n => myMenu.Refresh(n));
+```
+
+| Preset | Downscale | Temporal | Steps | LightSteps | MaxStep | MaxDistance | Shadow res / steps |
+|---|---|---|---|---|---|---|---|
+| Low | 3 | 2x2 | 128 | 2 | 500 m | 60 km | 256 / 8 |
+| Medium | 2 | 2x2 | 192 | 3 | 300 m | 80 km | 384 / 12 |
+| High | 2 | 2x2 | 256 | 4 | 300 m | 80 km | 512 / 16 |
+| Ultra | 2 | off | 256 | 4 | 300 m | 80 km | 512 / 16 |
+
+Ultra is the full look (every cloud pixel raymarched every frame). High has the same settings with temporal
+reprojection: a quarter of the cloud pixels is raymarched each frame and the rest is carried over from the
+previous frames. Changing any of those settings by hand turns the preset into `Custom`; a player's custom values
+are never overwritten unless a preset is chosen.
+
 ### From a config-driven panel
 
 A control panel that edits other plugins' BepInEx `ConfigFile` entries by GUID can show NoAtmoFX with no code at all:
@@ -121,6 +142,8 @@ NoAtmoFX reads its settings every frame, so a changed value applies at once. GUI
 | `Glass` / `WetGlass` | bool | Drops and frost on the canopy. |
 | `Nuclear` / `Enabled` | bool | Nuclear blasts push the clouds. |
 | `Integration` / `FollowBoscaliWeather` | bool | Clouds follow the Boscali weather. |
+| `Quality` / `Preset` | string | `Low`, `Medium`, `High`, `Ultra` or `Custom` (list of accepted values). Setting a name applies it. |
+| `Quality` / `Temporal` | int 0..2 | 0 off, 1 checkerboard (half the rays), 2 2x2 (a quarter of the rays). |
 | `Weather` / `ChangeTime` | float 1..30 | Minutes the clouds take to follow a weather change. |
 
 ## State and events
@@ -130,8 +153,8 @@ Read-only: `IsEnabled`, `Conditions`, `CloudBase`, `CloudTop`, `Coverage`, `Humi
 `FollowingHost`, `Version`, `ApiVersion`.
 
 Events (main thread): `EnabledChanged(bool)`, `Lightning(Vector3 worldPos, bool reachedGround)`,
-`NuclearBlast(Vector3 worldPos, float kilotons)`. With the bridge: `OnEnabledChanged`, `OnLightning`,
-`OnNuclearBlast`.
+`NuclearBlast(Vector3 worldPos, float kilotons)`, `PresetChanged(string name)`. With the bridge: `OnEnabledChanged`, `OnLightning`,
+`OnNuclearBlast`, `OnPresetChanged`.
 
 ## Example: weather system driving the clouds
 

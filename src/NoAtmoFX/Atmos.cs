@@ -29,6 +29,7 @@ namespace NoAtmoFX
         Vector3 _cbCamAtRead;
 
         // lightning
+        internal float FlashNow => _flash;
         float _nextStrike = 5, _flash, _flashPeak; Vector3 _flashW; readonly List<float> _pulses = new List<float>(); float _strikeT;
         Light _light; LineRenderer[] _bolts; Material _boltMat; float _boltT;
         AudioClip[] _thunder; bool _thunderSearched;
@@ -342,7 +343,7 @@ namespace NoAtmoFX
             {
                 var color = cd.renderer.cameraColorTargetHandle;
                 // sun rays: mask (sky x cloud transmittance) blurred towards the sun, added to the screen
-                if (_p.RaysActive && _p.CloudRT != null && _p.RTFrame == Time.frameCount && _p.Mat != null)
+                if (_p.RaysActive && _p.CloudImg != null && _p.RTFrame == Time.frameCount && _p.Mat != null)
                 {
                     int w = Mathf.Max(1, cd.cameraTargetDescriptor.width / 4), h = Mathf.Max(1, cd.cameraTargetDescriptor.height / 4);
                     if (RaysRT == null || RaysRT.width != w || RaysRT.height != h)
@@ -351,7 +352,7 @@ namespace NoAtmoFX
                         RaysRT = new RenderTexture(w, h, 0, RenderTextureFormat.RHalf) { name = "NOC rays", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
                         RaysRT.Create();
                     }
-                    cmd.Blit(_p.CloudRT, RaysRT, _p.Mat, 10);
+                    cmd.Blit(_p.CloudImg, RaysRT, _p.Mat, 10);
                     cmd.Blit(RaysRT, color, _p.Mat, 11);
                 }
                 // volumetric light shafts (cloud shadow in the air), 1/4 resolution

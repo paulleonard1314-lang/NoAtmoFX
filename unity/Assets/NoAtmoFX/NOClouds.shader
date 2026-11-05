@@ -3,7 +3,7 @@
 //   base  = condensation level (humid air -> low base)      cumulus top = instability
 //   types = shallow/congestus cumulus, cumulonimbus (very unstable + humid), stratus/stratocumulus (humid + stable),
 //           altocumulus/altostratus (humidity aloft), cirrus (high 2D streaks)
-// Passes: 0 raymarch | 1 composite | 2 map A | 3 warp | 4 map B | 5 map C | 6 shadow | 7 shadow depth | 8 probe | 9 Cb map | 10 rays | 11 rays (add) | 12 light shafts (volume) | 13 shafts (add) | 14 rain fog | 15 shafts (temporal average)
+// Passes: 0 raymarch | 1 composite | 2 map A | 3 warp | 4 map B | 5 map C | 6 shadow | 7 shadow depth | 8 probe | 9 Cb map | 10 rays | 11 rays (add) | 12 light shafts (volume) | 13 shafts (add) | 14 rain fog | 15 shafts (temporal average) | 16 temporal march (sparse) | 17 temporal reconstruct
 // Anti-tiling: each noise layer has its own rotation and period, plus domain warping and 3D turbulence.
 Shader "Hidden/NOClouds"
 {
@@ -829,14 +829,16 @@ Shader "Hidden/NOClouds"
             return lerp(1, f, saturate(_FogAmt));
         }
 
-        float4 fragMarch (v2f i) : SV_Target
+        // uv/ray/pix: the screen point this ray is for (pix only seeds the jitter); dRep = distance to the cloud
+        // (opacity-weighted) for temporal reprojection, 50 km when the ray met no cloud
+        float4 marchCore (float2 uv, float3 ray, float2 pix, out float dRep)
         {
-            float rl = length(i.ray);
-            float3 rd = i.ray / rl;
+            float rl = length(ray);
+            float3 rd = ray / rl;
             float sceneT = 1e9;
             if (_UseDepth > 0)
             {
-                float raw = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv);
+                float raw = SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uv, 0, 0));
                 float eye = LinearEyeDepth(raw);
                 if (eye < _ProjectionParams.z * 0.999) sceneT = eye * rl;
             }
@@ -860,7 +862,7 @@ Shader "Hidden/NOClouds"
                 t1 = min(min(t1, sceneT), _MaxDist);
 
                 float cosT = dot(rd, _SunDir);
-                float jit = ign(i.pos.xy + (_Jitter > 0 ? _Frame * 5.588238 : 0));
+                float jit = ign(pix + (_Jitter > 0 ? _Frame * 5.588238 : 0));
                 float t = t0 + clamp(t0 * _StepGrowth, _MinStep, _MaxStep) * jit;
                 bool skipped = false;
                 int fine = 0;
@@ -979,6 +981,7 @@ Shader "Hidden/NOClouds"
             float tci;
             float4 ci = cirrus(rd, min(sceneT, 400000), tci);
             float fd = wsum > 0 ? depthW / wsum : (ci.a > 0 ? tci : 1);
+            dRep = wsum > 0 ? depthW / wsum : (ci.a > 0.05 ? tci : 50000);
             if (camAlt < _CiAlt) { col += T * ci.rgb; T *= (1 - ci.a); }
             else { col = ci.rgb + (1 - ci.a) * col; T *= (1 - ci.a); }
 
@@ -987,6 +990,99 @@ Shader "Hidden/NOClouds"
             float f = fogFactor(fd);
             col = lerp(_FogCol.rgb * (1 - T), col, f);
             return float4(col, T);
+        }
+
+        float4 fragMarch (v2f i) : SV_Target
+        {
+            float d;
+            return marchCore(i.uv, i.ray, i.pos.xy, d);
+        }
+
+        // ---------- temporal reprojection (Quality > Temporal) ----------
+        // Each frame only one pixel of every 2x2 block (or every other pixel, checker) is raymarched into _TFresh;
+        // the reconstruct pass fills the others from the previous image, moved by the camera motion and clamped to
+        // the colours of the fresh neighbours at the same scene distance (so nothing ghosts around the aircraft).
+        Texture2D<uint4> _TFresh;
+        sampler2D _THist;
+        float4 _TSize;      // xy cloud image size (w, h), zw fresh grid size
+        float4 _TMode;      // x step in x (2), y step in y (1 checker, 2 quarter), z phase (frame), w history valid
+        float3 _TPrevBL, _TPrevRx, _TPrevUy, _TPrevF;   // previous frame's frustum (corner rays at depth 1)
+        float3 _TMove;      // camera motion since the previous frame, in the clouds' frame (wind included), m
+
+        // full-res pixel a fresh texel covers this frame
+        int2 tPix(int2 f)
+        {
+            int ph = (int)_TMode.z;
+            if (_TMode.y < 1.5) return int2(f.x * 2 + ((f.y + ph) & 1), f.y);   // checker
+            int2 o = ph == 0 ? int2(0, 0) : ph == 1 ? int2(1, 1) : ph == 2 ? int2(1, 0) : int2(0, 1);
+            return f * 2 + o;
+        }
+        float3 rayAt(float2 uv) { return lerp(lerp(_CornerBL, _CornerBR, uv.x), lerp(_CornerTL, _CornerTR, uv.x), uv.y); }
+
+        uint4 fragMarchT (v2f i) : SV_Target
+        {
+            int2 f = (int2)floor(i.uv * _TSize.zw);
+            int2 q = min(tPix(f), (int2)_TSize.xy - 1);
+            float2 uv = (q + 0.5) / _TSize.xy;
+            float d;
+            float4 c = marchCore(uv, rayAt(uv), q, d);
+            return uint4(f32tof16(c.r) | (f32tof16(c.g) << 16), f32tof16(c.b) | (f32tof16(c.a) << 16), asuint(d), 0);
+        }
+        float4 tUnpack(uint4 u, out float d)
+        {
+            d = asfloat(u.z);
+            return float4(f16tof32(u.x), f16tof32(u.x >> 16), f16tof32(u.y), f16tof32(u.y >> 16));
+        }
+
+        float4 fragReconstruct (v2f i) : SV_Target
+        {
+            int2 q = (int2)floor(i.uv * _TSize.xy);
+            float2 uv = (q + 0.5) / _TSize.xy;
+            float dC = LinearEyeDepth(SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uv, 0, 0)));
+            // fresh texels around q (their pixel positions depend on the phase)
+            int sy = _TMode.y < 1.5 ? 1 : 2;
+            int ph = (int)_TMode.z;
+            int oy = sy == 1 ? 0 : (ph == 1 || ph == 3 ? 1 : 0);
+            int fy0 = (int)floor((q.y - oy) / (float)sy + 0.5);
+            int2 fmax = (int2)_TSize.zw - 1;
+            float4 mn = 1e5, mx = -1e5, acc = 0;
+            float ws = 0, bestW = -1, dBest = 50000;
+            float4 best = 0;
+            [unroll] for (int jy = -1; jy <= 1; jy++)
+            {
+                int fy = clamp(fy0 + jy, 0, fmax.y);
+                int ox = sy == 1 ? ((fy + ph) & 1) : (ph == 1 || ph == 2 ? 1 : 0);
+                int fx0 = (int)floor((q.x - ox) / 2.0 + 0.5);
+                [unroll] for (int jx = -1; jx <= 1; jx++)
+                {
+                    int2 f = int2(clamp(fx0 + jx, 0, fmax.x), fy);
+                    int2 pk = tPix(f);
+                    float dk;
+                    float4 ck = tUnpack(_TFresh.Load(int3(f, 0)), dk);
+                    if (all(pk == q)) return ck;   // marched this frame
+                    float2 uk = (min(pk, (int2)_TSize.xy - 1) + 0.5) / _TSize.xy;
+                    float sk = LinearEyeDepth(SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uk, 0, 0)));
+                    float wd = exp(-abs(sk - dC) / max(min(sk, dC), 1e-3) * 12);
+                    float2 dv = pk - q;
+                    float w = wd * exp(-dot(dv, dv) * 0.35);
+                    acc += ck * w; ws += w;
+                    if (w > bestW) { bestW = w; best = ck; dBest = dk; }
+                    if (wd > 0.5) { mn = min(mn, ck); mx = max(mx, ck); }
+                }
+            }
+            float4 fill = ws > 1e-4 ? acc / ws : best;
+            if (_TMode.w < 0.5 || mx.a < mn.a) return fill;
+            // previous position of the cloud seen through q
+            float3 P = normalize(rayAt(uv)) * dBest + _TMove;
+            float fz = dot(P, _TPrevF);
+            if (fz <= 1e-3) return fill;
+            float3 l = P / fz - _TPrevBL;
+            float2 puv = float2(dot(l, _TPrevRx) / dot(_TPrevRx, _TPrevRx), dot(l, _TPrevUy) / dot(_TPrevUy, _TPrevUy));
+            if (any(puv < 0) || any(puv > 1)) return fill;
+            float4 h = tex2Dlod(_THist, float4(puv, 0, 0));
+            // keep the history inside what the fresh neighbours allow (slightly widened: they sit 1-2 pixels away)
+            float4 ext = (mx - mn) * 0.15 + float4(0.004, 0.004, 0.004, 0.01);
+            return clamp(h, mn - ext, mx + ext);
         }
 
 
@@ -1375,6 +1471,16 @@ Shader "Hidden/NOClouds"
         Pass { CGPROGRAM
             #pragma vertex vert
             #pragma fragment fragShaftsTA
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragMarchT
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragReconstruct
             #pragma target 4.5
             ENDCG }
     }

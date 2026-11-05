@@ -11,6 +11,7 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering.Universal;
 
 namespace NoAtmoFX
@@ -53,7 +54,7 @@ namespace NoAtmoFX
         // Quality
         ConfigEntry<int> _steps, _lightSteps, _downscale;
         ConfigEntry<float> _minStep, _stepGrowth, _maxStep, _maxDist;
-        ConfigEntry<bool> _mapSlicing, _perfMeter; ConfigEntry<int> _shEvery;
+        ConfigEntry<bool> _mapSlicing, _perfMeter; ConfigEntry<int> _shEvery, _temporal; internal ConfigEntry<string> _preset;
 
         Material _mat;
         CloudPass _pass;
@@ -63,6 +64,7 @@ namespace NoAtmoFX
         internal int ShDFrame = -1; internal Camera ShDCam;
         internal int WxFrame = -1;
         internal RenderTexture CloudRT;
+        internal RenderTexture CloudImg;   // the cloud image composited this frame (CloudRT, or the temporal history)
         internal int RTFrame = -1;
         internal Material Mat => _mat;
         internal float WExtNow => _maxDist.Value;
@@ -192,6 +194,8 @@ namespace NoAtmoFX
             { "Quality/LightSteps", "Passos em direção ao sol." },
             { "Quality/Downscale", "1 = resolução cheia, 2 = metade, 4 = um quarto." },
             { "Quality/MinStep", "Passo mínimo (m)." },
+            { "Quality/Preset", "Preset de qualidade: Low, Medium, High ou Ultra (Ultra = visual completo, todo pixel calculado todo quadro). Escolher um ajusta Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance e a resolução/passos da sombra; mexer em qualquer um desses à mão vira Custom." },
+            { "Quality/Temporal", "Reprojeção temporal: 0 = desligada (todo pixel de nuvem calculado todo quadro), 1 = metade dos pixels por quadro (xadrez), 2 = um quarto por quadro (2x2). O resto vem dos quadros anteriores, movido com a câmera e preso às cores dos pixels novos em volta. Raios, clarões nucleares e cortes de câmera sempre são desenhados inteiros." },
             { "Quality/StepGrowth", "Quanto o passo cresce com a distância." },
             { "Quality/MaxStep", "Passo máximo (m)." },
             { "Quality/MaxDistance", "Distância máxima desenhada (m)." },
@@ -383,9 +387,11 @@ namespace NoAtmoFX
             _sunWhite = C.Bind("Lighting", "SunWhiten", 0.3737624f, new ConfigDescription("How much to whiten the sun colour.", R(0, 1)));
             _fogAmt = C.Bind("Lighting", "GameFog", 1f, new ConfigDescription("How much the game's fog applies to the clouds.", R(0, 2)));
 
+            _preset = C.Bind("Quality", "Preset", "Custom", new ConfigDescription("Quality preset: Low, Medium, High or Ultra (Ultra = the full look, every pixel raymarched every frame). Choosing one sets Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance and the shadow resolution/steps; changing any of those by hand turns this into Custom.", new AcceptableValueList<string>(PresetNames)));
             _steps = C.Bind("Quality", "Steps", 256, new ConfigDescription("Maximum raymarch steps.", Ri(16, 512)));
             _lightSteps = C.Bind("Quality", "LightSteps", 4, new ConfigDescription("Steps toward the sun.", Ri(1, 6)));
             _downscale = C.Bind("Quality", "Downscale", 2, new ConfigDescription("1 = full resolution, 2 = half, 4 = quarter.", Ri(1, 4)));
+            _temporal = C.Bind("Quality", "Temporal", 0, new ConfigDescription("Temporal reprojection: 0 = off (every cloud pixel raymarched every frame), 1 = half of the pixels per frame (checkerboard), 2 = a quarter per frame (2x2). The rest comes from the previous frames, moved with the camera and kept within the colours of the fresh pixels around them. Lightning, nuclear flashes and camera cuts are always drawn in full.", Ri(0, 2)));
             _minStep = C.Bind("Quality", "MinStep", 15f, new ConfigDescription("Minimum step (m).", R(5, 200)));
             _stepGrowth = C.Bind("Quality", "StepGrowth", 0.006f, new ConfigDescription("How much the step grows with distance.", R(0.001f, 0.05f)));
             _maxStep = C.Bind("Quality", "MaxStep", 300f, new ConfigDescription("Maximum step (m).", R(50, 3000)));
@@ -400,6 +406,7 @@ namespace NoAtmoFX
             _shRes = C.Bind("Shadows", "ShadowResolution", 512, new ConfigDescription("Shadow map resolution.", Ri(128, 2048)));
             _shOpacity = C.Bind("Shadows", "ShadowOpacity", 0.85f, new ConfigDescription("How much the shadow darkens sunlight.", R(0, 1)));
             _shSteps = C.Bind("Shadows", "ShadowSteps", 16, new ConfigDescription("Steps through the cloud layer.", Ri(4, 48)));
+            InitPresets();
             _shProt = C.Bind("Shadows", "OwnAircraftRadius", 150f, new ConfigDescription("Radius (m) around the camera where clouds below it don't shadow (protects your aircraft). The rest of the ground gets shadow from all clouds.", R(0, 2000)));
             _shBelow = C.Bind("Shadows", "ShadowFromBelow", 0f, new ConfigDescription("1 = clouds below the camera shadow even your aircraft (normally 0).", R(0, 1)));
 
@@ -625,7 +632,7 @@ namespace NoAtmoFX
             RenderPipelineManager.beginCameraRendering -= OnBeginCamera;
             SetGameCloudsHidden(false);
             Wet?.Release(); if (ProbeRT != null) ProbeRT.Release(); Atmos?.Release();
-            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT }) if (r != null) r.Release();
+            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, TFresh, THist0, THist1 }) if (r != null) r.Release();
         }
 
         // ---------- rain: our own, or matched to the Nuclear Rain mod ----------
@@ -1054,6 +1061,85 @@ namespace NoAtmoFX
             return _windDirL;
         }
 
+        // ---------- quality presets ----------
+        // A preset only writes the entries below. Changing one of them by hand (F11, ConfigurationManager, another
+        // mod's panel) makes the preset read Custom again; the player's own values are never overwritten unless a
+        // named preset is chosen. On load, Custom is replaced by the name of the preset the values match.
+        internal static readonly string[] PresetNames = { "Custom", "Low", "Medium", "High", "Ultra" };
+        //                                    Downscale Temporal Steps LightSteps MaxStep MaxDistance ShadowRes ShadowSteps
+        static readonly float[][] PresetVals =
+        {
+            new float[] { 3, 2, 128, 2, 500, 60000, 256, 8 },     // Low
+            new float[] { 2, 2, 192, 3, 300, 80000, 384, 12 },    // Medium
+            new float[] { 2, 2, 256, 4, 300, 80000, 512, 16 },    // High: Ultra's look, a quarter of the rays per frame
+            new float[] { 2, 0, 256, 4, 300, 80000, 512, 16 },    // Ultra: everything every frame (the look up to 1.3)
+        };
+        ConfigEntryBase[] _pEntries;
+        bool _pApplying;
+
+        void InitPresets()
+        {
+            _pEntries = new ConfigEntryBase[] { _downscale, _temporal, _steps, _lightSteps, _maxStep, _maxDist, _shRes, _shSteps };
+            Config.SettingChanged += (s, a) =>
+            {
+                if (_pApplying) return;
+                var e = a.ChangedSetting;
+                if (e == _preset) { if (_preset.Value == "Custom") SyncPresetName(); else ApplyPreset(_preset.Value, Config.SaveOnConfigSet); }
+                else if (System.Array.IndexOf(_pEntries, e) >= 0) SyncPresetName();
+            };
+            if (_preset.Value == "Custom" || System.Array.IndexOf(PresetNames, _preset.Value) < 0) SyncPresetName();
+            else if (MatchPreset() != _preset.Value) ApplyPreset(_preset.Value, true);   // chosen in the file (by hand or by another mod's menu)
+        }
+
+        string MatchPreset()
+        {
+            for (int i = 0; i < PresetVals.Length; i++)
+            {
+                bool ok = true;
+                for (int k = 0; k < _pEntries.Length && ok; k++) ok = Mathf.Abs(System.Convert.ToSingle(_pEntries[k].BoxedValue) - PresetVals[i][k]) < 0.01f;
+                if (ok) return PresetNames[i + 1];
+            }
+            return "Custom";
+        }
+
+        void SyncPresetName()
+        {
+            string n = MatchPreset();
+            if (n == _preset.Value) return;
+            _pApplying = true;
+            try { SetEntry(_preset, n, Config.SaveOnConfigSet); } finally { _pApplying = false; }
+            NoAtmoFXApi.RaisePreset(n);
+        }
+
+        internal bool ApplyPreset(string name, bool persist)
+        {
+            int i = System.Array.FindIndex(PresetNames, n => string.Equals(n, name, System.StringComparison.OrdinalIgnoreCase)) - 1;
+            if (i < 0) return false;
+            _pApplying = true;
+            bool save = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            try
+            {
+                var v = PresetVals[i];
+                for (int k = 0; k < _pEntries.Length; k++)
+                {
+                    var e = _pEntries[k];
+                    if (e is ConfigEntry<int> ei) ei.Value = Mathf.RoundToInt(v[k]); else if (e is ConfigEntry<float> ef) ef.Value = v[k];
+                }
+                _preset.Value = PresetNames[i + 1];
+            }
+            finally { Config.SaveOnConfigSet = save; _pApplying = false; }
+            if (persist) Config.Save();
+            NoAtmoFXApi.RaisePreset(_preset.Value);
+            return true;
+        }
+
+        // ---------- temporal reprojection state (main camera) ----------
+        internal RenderTexture TFresh, THist0, THist1;
+        internal int THistIdx, TLastFrame = -10, TPhase; internal bool THistOk; internal Camera TCam;
+        internal Vector3 TNowBL, TNowRx, TNowUy, TNowF, TNowPos, TPrevBL, TPrevRx, TPrevUy, TPrevF, TPrevPos;
+        internal float TFlashPrev, TNukePrev;
+        internal int TemporalMode => Mathf.Clamp(_temporal.Value, 0, 2);
+
         // ---------- uniforms (called by the pass) ----------
         internal Material Prepare(Camera cam, bool hdr, out int downscale)
         {
@@ -1067,6 +1153,7 @@ namespace NoAtmoFX
             m.SetVector(ID._CornerTR, tr.TransformVector(_corners[2]));
             m.SetVector(ID._CornerBR, tr.TransformVector(_corners[3]));
             m.SetVector(ID._CamFwd, tr.forward);
+            TNowBL = tr.TransformVector(_corners[0]); TNowRx = tr.TransformVector(_corners[3]) - TNowBL; TNowUy = tr.TransformVector(_corners[1]) - TNowBL; TNowF = tr.forward;
 
             Vector3 g = tr.position - Datum.originPosition; // global position (y above sea level)
             float Rp = _planetR.Value;
@@ -1078,6 +1165,7 @@ namespace NoAtmoFX
             // +5e5: the Mod seam sits 500 km away (it used to be at the map center and the whole field jumped when crossing it)
             var G2 = new Vector2((float)Mod(g.x - _windX + 5e5, 1e6), (float)Mod(g.z - _windZ + 5e5, 1e6));
             m.SetVector(ID._G, G2);
+            TNowPos = new Vector3(G2.x, g.y, G2.y);
             float wtx = 2f * _maxDist.Value / 512f;   // coarsest map texel (distortion)
             // the weather maps stay put in cloud space (their center snapped to the texel grid) and are only
             // recentered after the camera has moved a few texels: the content at a given place is the same either
@@ -1322,6 +1410,14 @@ namespace NoAtmoFX
                     if (v != i.Value) i.Value = v;
                 }
                 else if (e is ConfigEntry<bool> b) b.Value = GUILayout.Toggle(b.Value, " " + key);
+                else if (e is ConfigEntry<string> sv && e.Description.AcceptableValues is AcceptableValueList<string> lv)
+                {
+                    GUILayout.Label($"{key}: {sv.Value}");
+                    GUILayout.BeginHorizontal();
+                    foreach (var o in lv.AcceptableValues)
+                        if (GUILayout.Toggle(sv.Value == o, o, GUI.skin.button) && sv.Value != o) sv.Value = o;
+                    GUILayout.EndHorizontal();
+                }
                 else continue;
                 string desc = e.Description.Description;
                 if (Pt && PtDesc.TryGetValue(kv.Key.Section + "/" + key, out var pd)) desc = pd;
@@ -1345,32 +1441,34 @@ namespace NoAtmoFX
         struct BenchStep { public string en, pt; public System.Action set; }
         BenchStep[] _bSteps; int _bIdx = -1; float _bT0; double _bSum; int _bN; float _bWorst; readonly List<float> _bDts = new List<float>();
         string[] _bRes; bool _bSave;
-        bool _bOn, _bSh, _bRain, _bSlice; float _bRays, _bShafts; int _bEvery, _bDs;
+        bool _bOn, _bSh, _bRain, _bSlice; float _bRays, _bShafts; int _bEvery, _bDs, _bTmp;
         const float BenchWarm = 1.5f, BenchLen = 5f;
 
         void StartBench()
         {
-            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value;
-            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; }
+            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value; _bTmp = _temporal.Value;
+            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; }
             _bSteps = new[]
             {
                 new BenchStep { en = "Mod off", pt = "Mod desligado", set = () => { Mine(); _on.Value = false; } },
                 new BenchStep { en = "Clouds only (no shadows, rays, shafts, rain curtains)", pt = "Só nuvens (sem sombra, raios, feixes, cortinas)", set = () => { Mine(); _shOn.Value = false; _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
                 new BenchStep { en = "Clouds + shadows", pt = "Nuvens + sombras", set = () => { Mine(); _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
-                new BenchStep { en = "Your settings (1.2)", pt = "Suas configurações (1.2)", set = () => Mine() },
+                new BenchStep { en = "Your settings", pt = "Suas configurações", set = () => Mine() },
                 new BenchStep { en = "Your settings, old 1.1 way", pt = "Suas configurações, jeito antigo 1.1", set = () => { Mine(); _mapSlicing.Value = false; _shEvery.Value = 1; } },
                 new BenchStep { en = "Your settings, one Downscale step lower", pt = "Suas configurações, Downscale um nível abaixo", set = () => { Mine(); _downscale.Value = Mathf.Min(_bDs + 1, 4); } },
+                _bTmp > 0 ? new BenchStep { en = "Your settings, temporal off", pt = "Suas configurações, temporal desligado", set = () => { Mine(); _temporal.Value = 0; } }
+                          : new BenchStep { en = "Your settings, temporal 2x2", pt = "Suas configurações, temporal 2x2", set = () => { Mine(); _temporal.Value = 2; } },
             };
             _bRes = new string[_bSteps.Length];
             _bSave = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
             _bIdx = 0; _bSteps[0].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
-            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Steps {_steps.Value}");
+            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Temporal {_bTmp}, Steps {_steps.Value}, preset {_preset.Value}");
         }
 
         void StopBench(bool done)
         {
             if (_bIdx < 0) return;
-            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs;
+            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp;
             Config.SaveOnConfigSet = _bSave;
             _bIdx = -1;
             if (done) Log.LogInfo("Benchmark results:\n" + string.Join("\n", _bRes));
@@ -1452,6 +1550,80 @@ namespace NoAtmoFX
             if (at != null && d.Length > 1) { at.ProbeRain = d[1].r; at.ProbeCb = d[1].g; at.ProbeRainValid = true; }
         }
 
+        // ---------- temporal reprojection ----------
+        static readonly int T_Fresh = Shader.PropertyToID("_TFresh"), T_Hist = Shader.PropertyToID("_THist"), T_Size = Shader.PropertyToID("_TSize"),
+            T_Mode = Shader.PropertyToID("_TMode"), T_BL = Shader.PropertyToID("_TPrevBL"), T_Rx = Shader.PropertyToID("_TPrevRx"),
+            T_Uy = Shader.PropertyToID("_TPrevUy"), T_F = Shader.PropertyToID("_TPrevF"), T_Move = Shader.PropertyToID("_TMove");
+        static int _tSupport = -1;
+        static bool TemporalSupported(Material mat)
+        {
+            if (_tSupport < 0)
+            {
+                bool fmt = SystemInfo.IsFormatSupported(GraphicsFormat.R32G32B32A32_UInt, FormatUsage.Render);
+                _tSupport = fmt && mat.passCount >= 18 ? 1 : 0;
+                NOCloudsPlugin.Log.LogInfo(_tSupport == 1 ? "Temporal reprojection available" :
+                    "Temporal reprojection unavailable (" + (!fmt ? "no integer render target" : "shader bundle older than 1.3, run NOClouds > Build bundle") + "); clouds are drawn in full");
+            }
+            return _tSupport == 1;
+        }
+
+        static RenderTexture MakeRT(RenderTexture rt, int w, int h, GraphicsFormat f, FilterMode fm, string name)
+        {
+            if (rt != null && rt.width == w && rt.height == h) return rt;
+            if (rt != null) rt.Release();
+            rt = new RenderTexture(w, h, f, GraphicsFormat.None) { name = name, filterMode = fm, wrapMode = TextureWrapMode.Clamp };
+            rt.Create();
+            return rt;
+        }
+
+        static float Wrap(float d) => d > 5e5f ? d - 1e6f : d < -5e5f ? d + 1e6f : d;
+
+        // Marches only part of the pixels (1 of 2x2, or 1 of 2) and rebuilds the full image from the previous one.
+        // A full march (into the history, so the next frames have a clean start) when there is nothing to reproject
+        // from or the light changes too fast for old pixels: lightning, nuclear flash, camera cut, size change.
+        RenderTexture MarchTemporal(CommandBuffer cmd, Camera cam, Material mat, int w, int h)
+        {
+            var p = _p;
+            int mode = p.TemporalMode;
+            int sx = 2, sy = mode == 1 ? 1 : 2;
+            int fw = (w + sx - 1) / sx, fh = (h + sy - 1) / sy;
+            p.THist0 = MakeRT(p.THist0, w, h, GraphicsFormat.R16G16B16A16_SFloat, FilterMode.Bilinear, "NOClouds history A");
+            p.THist1 = MakeRT(p.THist1, w, h, GraphicsFormat.R16G16B16A16_SFloat, FilterMode.Bilinear, "NOClouds history B");
+            bool sizeChanged = p.TFresh == null || p.TFresh.width != fw || p.TFresh.height != fh;
+            p.TFresh = MakeRT(p.TFresh, fw, fh, GraphicsFormat.R32G32B32A32_UInt, FilterMode.Point, "NOClouds temporal");
+            var prev = p.THistIdx == 0 ? p.THist0 : p.THist1;
+            var cur = p.THistIdx == 0 ? p.THist1 : p.THist0;
+
+            float flash = p.Atmos != null ? p.Atmos.FlashNow : 0, nk = p.Nukes != null ? p.Nukes.LightNow : 0;
+            Vector3 move = p.TNowPos - p.TPrevPos; move.x = Wrap(move.x); move.z = Wrap(move.z);
+            bool full = !p.THistOk || sizeChanged || p.TCam != cam || Time.frameCount - p.TLastFrame != 1
+                     || flash > 0.01f || p.TFlashPrev > 0.01f
+                     || Mathf.Abs(nk - p.TNukePrev) > 0.03f * Mathf.Max(nk, 0.05f)
+                     || Vector3.Angle(p.TNowF, p.TPrevF) > 10f || move.magnitude > 500f;
+            p.TFlashPrev = flash; p.TNukePrev = nk;
+
+            using (new ProfilingScope(cmd, Perf.March))
+            {
+                if (full) cmd.Blit((Texture)null, cur, mat, 0);
+                else
+                {
+                    p.TPhase = (p.TPhase + 1) & (mode == 1 ? 1 : 3);
+                    cmd.SetGlobalVector(T_Size, new Vector4(w, h, fw, fh));
+                    cmd.SetGlobalVector(T_Mode, new Vector4(sx, sy, p.TPhase, 1));
+                    cmd.SetGlobalVector(T_BL, p.TPrevBL); cmd.SetGlobalVector(T_Rx, p.TPrevRx);
+                    cmd.SetGlobalVector(T_Uy, p.TPrevUy); cmd.SetGlobalVector(T_F, p.TPrevF);
+                    cmd.SetGlobalVector(T_Move, move);
+                    cmd.Blit((Texture)null, p.TFresh, mat, 16);
+                    cmd.SetGlobalTexture(T_Fresh, p.TFresh);
+                    cmd.SetGlobalTexture(T_Hist, prev);
+                    cmd.Blit((Texture)null, cur, mat, 17);
+                }
+            }
+            p.THistOk = true; p.THistIdx ^= 1; p.TCam = cam; p.TLastFrame = Time.frameCount;
+            p.TPrevBL = p.TNowBL; p.TPrevRx = p.TNowRx; p.TPrevUy = p.TNowUy; p.TPrevF = p.TNowF; p.TPrevPos = p.TNowPos;
+            return cur;
+        }
+
         public CloudPass(NOCloudsPlugin p)
         {
             _p = p;
@@ -1485,8 +1657,10 @@ namespace NoAtmoFX
                 // weather maps are centered on the camera: the probe is elsewhere, so rebuild them for it and
                 // force the main camera to rebuild its own afterwards
                 _p.EnsureWeather(cmd, mat, refl);
+                bool temporal = !refl && _p.TemporalMode > 0 && TemporalSupported(mat);
                 var rt = refl ? _p.ReflCloudRT : _p.CloudRT;
-                if (rt == null || rt.width != w || rt.height != h)
+                if (temporal) rt = null;
+                else if (rt == null || rt.width != w || rt.height != h)
                 {
                     if (rt != null) rt.Release();
                     rt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGBHalf) { name = refl ? "NOCloudsRT probe" : "NOCloudsRT", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
@@ -1513,8 +1687,9 @@ namespace NoAtmoFX
                     float ext = _p.WExtNow; Vector2 gd = _p.GDLast; Vector3 cpos = cam.transform.position;
                     cmd.RequestAsyncReadback(_p.CbRT, r => { if (!r.hasError) at.OnCbMap(r.GetData<Color>(), 96, ext, gd, cpos); });
                 }
-                using (new ProfilingScope(cmd, refl ? null : Perf.March)) cmd.Blit((Texture)null, rt, mat, 0);
-                if (!refl) _p.RTFrame = Time.frameCount;
+                if (temporal) rt = MarchTemporal(cmd, cam, mat, w, h);
+                else using (new ProfilingScope(cmd, refl ? null : Perf.March)) cmd.Blit((Texture)null, rt, mat, 0);
+                if (!refl) { _p.THistOk &= temporal; _p.CloudImg = rt; _p.RTFrame = Time.frameCount; }
                 if (ownW)
                 {
                     // sea first (with the camera depth), then the clouds on top of everything
@@ -1623,7 +1798,7 @@ namespace NoAtmoFX
         }
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            var rt = _p.CloudRT;
+            var rt = _p.CloudImg;
             var mat = _p.Mat;
             if (rt == null || mat == null || _p.RTFrame != Time.frameCount) return;
             var cmd = CommandBufferPool.Get("NOClouds water");
