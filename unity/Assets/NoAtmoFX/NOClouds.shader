@@ -885,6 +885,9 @@ Shader "Hidden/NOClouds"
                     float3 p = rd * t;
                     float hA;
                     float dens = density(p, false, hA);
+                    // fade out over the last 15% of MaxDistance: the march stopping there drew the layer's far edge
+                    // as a hard straight line across the horizon
+                    dens *= saturate((_MaxDist - t) / (0.15 * _MaxDist));
                     if (dens > 0.0001 && skipped) { t -= stp; skipped = false; fine = 3; continue; }
                     if (dens > 0.0001)
                     {
