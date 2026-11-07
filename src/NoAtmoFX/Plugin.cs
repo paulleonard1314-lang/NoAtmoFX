@@ -396,7 +396,7 @@ namespace NoAtmoFX
             _lightLod = C.Bind("Quality", "LightLOD", 1, new ConfigDescription("Cheaper sunlight inside the clouds where it cannot be told apart: beyond ~18-28 km and deep inside a cloud (where less than ~25% of the view still gets through). Half the light samples, same total length, no fine detail there. 0 = off (Ultra).", Ri(0, 1)));
             _emptySkip = C.Bind("Quality", "EmptySkip", true, "Empty-space skipping: a small map of how far each spot is from the nearest place a cloud could be lets the raymarch jump over clear air between clouds. Same look (the map is conservative), fewer steps. Off = the 1.3 march.");
             _downscale = C.Bind("Quality", "Downscale", 2, new ConfigDescription("1 = full resolution, 2 = half, 4 = quarter.", Ri(1, 4)));
-            _temporal = C.Bind("Quality", "Temporal", 0, new ConfigDescription("Temporal reprojection: 0 = off (every cloud pixel raymarched every frame), 1 = half of the pixels per frame (checkerboard), 2 = a quarter per frame (2x2). The rest comes from the previous frames, moved with the camera and kept within the colours of the fresh pixels around them. Lightning, nuclear flashes and camera cuts are always drawn in full.", Ri(0, 2)));
+            _temporal = C.Bind("Quality", "Temporal", 2, new ConfigDescription("Temporal reprojection: 0 = off (every cloud pixel raymarched every frame), 1 = half of the pixels per frame (checkerboard), 2 = a quarter per frame (2x2). The rest comes from the previous frames, moved with the camera and kept within the colours of the fresh pixels around them. Lightning, nuclear flashes and camera cuts are always drawn in full.", Ri(0, 2)));
             _minStep = C.Bind("Quality", "MinStep", 15f, new ConfigDescription("Minimum step (m).", R(5, 200)));
             _stepGrowth = C.Bind("Quality", "StepGrowth", 0.006f, new ConfigDescription("How much the step grows with distance.", R(0.001f, 0.05f)));
             _maxStep = C.Bind("Quality", "MaxStep", 300f, new ConfigDescription("Maximum step (m).", R(50, 3000)));
@@ -1120,6 +1120,17 @@ namespace NoAtmoFX
                 if (e == _preset) { if (_preset.Value == "Custom") SyncPresetName(); else ApplyPreset(_preset.Value, Config.SaveOnConfigSet); }
                 else if (System.Array.IndexOf(_pEntries, e) >= 0) SyncPresetName();
             };
+            // 1.4.1: the default is High (Ultra's look with temporal 2x2). Configs still on the 1.4 factory values (which
+            // matched no preset) move to High once; anything changed by hand stays as it is.
+            var mig = Config.Bind("Internal", "DefaultPresetMigrated", false, "Set once the 1.4 factory quality values were moved to the High preset.");
+            if (!mig.Value)
+            {
+                float[] old14 = { 2, 0, 256, 4, 300, 80000, 512, 16, 1 };
+                bool same = true;
+                for (int k = 0; k < _pEntries.Length && same; k++) same = Mathf.Abs(System.Convert.ToSingle(_pEntries[k].BoxedValue) - old14[k]) < 0.01f;
+                if (same && _preset.Value == "Custom") { ApplyPreset("High", true); Log.LogInfo("Quality: 1.4 factory values moved to the High preset (Ultra's look with temporal 2x2)"); }
+                mig.Value = true;
+            }
             if (_preset.Value == "Custom" || System.Array.IndexOf(PresetNames, _preset.Value) < 0) SyncPresetName();
             else if (MatchPreset() != _preset.Value) ApplyPreset(_preset.Value, true);   // chosen in the file (by hand or by another mod's menu)
         }
