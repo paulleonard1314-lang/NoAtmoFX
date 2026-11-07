@@ -876,6 +876,8 @@ Shader "Hidden/NOClouds"
                 float jit = ign(pix + (_Jitter > 0 ? _Frame * 5.588238 : 0));
                 float t = t0 + clamp(t0 * _StepGrowth, _MinStep, _MaxStep) * jit;
                 bool skipped = false;
+                float tJ = 0;          // where the last jump started (that sample was empty)
+                bool walkIn = false;   // after going back: normal steps only, until the cloud is reached
                 int fine = 0;
                 int maxS = (int)_Steps;
                 [loop] for (int k = 0; k < maxS; k++)
@@ -888,9 +890,12 @@ Shader "Hidden/NOClouds"
                     // fade out over the last 15% of MaxDistance: the march stopping there drew the layer's far edge
                     // as a hard straight line across the horizon
                     dens *= saturate((_MaxDist - t) / (0.15 * _MaxDist));
-                    if (dens > 0.0001 && skipped) { t -= stp; skipped = false; fine = 3; continue; }
+                    // a jump that lands in cloud: go back to just after where it started (at most 16 steps) and walk in with normal steps
+                    // (going back one step only lost the near side of the cloud after a long jump: see-through edges)
+                    if (dens > 0.0001 && skipped) { t = min(t - stp, max(tJ + clamp(tJ * _StepGrowth, _MinStep, _MaxStep), t - 16 * stp)); skipped = false; fine = 3; walkIn = true; continue; }
                     if (dens > 0.0001)
                     {
+                        walkIn = false;
                         // cheaper light where it cannot be seen: deep inside (what is left of this ray weighs < ~25%) or far away;
                         // the switch is dithered per pixel so there is no line where it changes
                         bool lodL = _LightLod > 0.5 && (T < 0.12 + 0.15 * jit || t > 18000 + 10000 * jit);
@@ -934,6 +939,7 @@ Shader "Hidden/NOClouds"
                         fine = 2;
                     }
                     else if (fine > 0) { t += stp; fine--; }
+                    else if (walkIn) { t += stp; }
                     else
                     {
                         // empty air: far above every possible cloud top (e.g. flying at 7 km) jump straight down to
@@ -966,12 +972,20 @@ Shader "Hidden/NOClouds"
                                     sk = max(sk, jm);
                                 }
                             }
+                            // the envelope is only known HERE: a shallow ray used to jump kilometres sideways on it, into
+                            // places where the tops are higher, and skipped over the bumpy tops of thin layers (dotted
+                            // cloud edges, see-through layered decks). Sideways travel is now held to the clearance
+                            // (tops rising at most 1 m per m sideways), at least two weather texels: far above the
+                            // clouds the jumps stay long (no ring of missing distant clouds), close above them short.
                             float clr = alt - topEnvelope(p);
                             if (_NkN < 0.5 && clr > 150)   // the rings can sit above the normal tops
-                                sk = max(sk, min((clr - 100) / (dn + 0.25), 4000));
+                            {
+                                float hcap = max(4 * _WExt / 1024, clr - 100) / max(length(rd.xz), 1e-3);
+                                sk = max(sk, min(min((clr - 100) / (dn + 0.25), 4000), hcap));
+                            }
                             sk = max(stp * 2, min(sk, dN));
                         }
-                        t += sk; skipped = true;
+                        tJ = t; t += sk; skipped = true;
                     }
                 }
             }
