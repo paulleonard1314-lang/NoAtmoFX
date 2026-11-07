@@ -66,7 +66,7 @@ namespace NoAtmoFX
             }
             Glass = new Material(g); Brush = new Material(b);
             DropRT = NewRT("NOC drops"); TrailRT = NewRT("NOC trails");
-            Glass.SetTexture("_DropTex", DropRT); Glass.SetTexture("_TrailTex", TrailRT); Glass.SetTexture("_EdgeTex", Texture2D.whiteTexture);
+            Glass.SetTexture(ID._DropTex, DropRT); Glass.SetTexture(ID._TrailTex, TrailRT); Glass.SetTexture(ID._EdgeTex, Texture2D.whiteTexture);
             _mDrops = new Mesh { name = "NOC drops" }; _mDrops.MarkDynamic();
             _mTrail = new Mesh { name = "NOC trails" }; _mTrail.MarkDynamic();
             _mQuad = new Mesh { name = "NOC quad" };
@@ -129,7 +129,7 @@ namespace NoAtmoFX
                     {
                         if (m == null) continue;
                         string n = (m.name + " " + r.name + " " + (m.shader != null ? m.shader.name : "")).ToLowerInvariant();
-                        bool glassy = m.HasProperty("_Cracked_Amount") || n.Contains("glass") || n.Contains("canopy") || n.Contains("vidro")
+                        bool glassy = m.HasProperty(ID._Cracked_Amount) || n.Contains("glass") || n.Contains("canopy") || n.Contains("vidro")
                                       || n.Contains("windscreen") || n.Contains("windshield") || n.Contains("canopi");
                         bool hud = n.Contains("hud") || n.Contains("light") || n.Contains("lamp") || n.Contains("lens") || n.Contains("flare") || n.Contains("afterburner") || n.Contains("flame");
                         if (glassy && !hud) { Renderers.Add(r); names.Add(Desc(r)); break; }
@@ -264,7 +264,7 @@ namespace NoAtmoFX
 
             // running + trails
             float dry = num5 > 0.05f ? 0.008f : 0.12f + q * 0.05f;
-            Brush.SetFloat("_Fade", Mathf.Clamp01(1f - dry * dt * 3f));
+            Brush.SetFloat(ID._Fade, Mathf.Clamp01(1f - dry * dt * 3f));
             BeginMesh();
             const float thr = 0.5f;   // adhesion: gradual start (2.4 used to make it on/off at high speed)
             _trailActive = 0;
@@ -338,9 +338,9 @@ namespace NoAtmoFX
                     MaskRT = new RenderTexture(256, 128, 0, RenderTextureFormat.R8) { name = "NOC glass", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; MaskRT.Create();
                     MaskTmp = new RenderTexture(256, 128, 0, RenderTextureFormat.R8) { name = "NOC glass tmp", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; MaskTmp.Create();
                     EdgeRT = new RenderTexture(256, 128, 0, RenderTextureFormat.R8) { name = "NOC edge", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; EdgeRT.Create();
-                    Glass.SetTexture("_EdgeTex", EdgeRT);
+                    Glass.SetTexture(ID._EdgeTex, EdgeRT);
                 }
-                Brush.SetMatrix("_AcW2L", W2L); Brush.SetVector("_EyeL", EyeL);
+                Brush.SetMatrix(ID._AcW2L, W2L); Brush.SetVector(ID._EyeL, EyeL);
                 cmd.SetRenderTarget(MaskRT);
                 cmd.ClearRenderTarget(false, true, Color.clear);
                 foreach (var r in Renderers)
@@ -349,10 +349,10 @@ namespace NoAtmoFX
                     int n = Mathf.Max(1, r.sharedMaterials.Length);
                     for (int s = 0; s < n; s++) cmd.DrawRenderer(r, Brush, s, 3);
                 }
-                _mpb.Clear(); _mpb.SetTexture("_MainTex", MaskRT); _mpb.SetVector("_BlurStep", new Vector4(2f / 256, 2f / 128));
+                _mpb.Clear(); _mpb.SetTexture(ID._MainTex, MaskRT); _mpb.SetVector(ID._BlurStep, new Vector4(2f / 256, 2f / 128));
                 cmd.SetRenderTarget(MaskTmp);
                 cmd.DrawMesh(_mQuad, Matrix4x4.identity, Brush, 0, 4, _mpb);
-                _mpb.Clear(); _mpb.SetTexture("_MainTex", MaskTmp); _mpb.SetVector("_BlurStep", new Vector4(3f / 256, 3f / 128));
+                _mpb.Clear(); _mpb.SetTexture(ID._MainTex, MaskTmp); _mpb.SetVector(ID._BlurStep, new Vector4(3f / 256, 3f / 128));
                 cmd.SetRenderTarget(EdgeRT);
                 cmd.DrawMesh(_mQuad, Matrix4x4.identity, Brush, 0, 4, _mpb);
             }
@@ -361,20 +361,20 @@ namespace NoAtmoFX
 
             _wet = Mathf.Clamp01(_wet + (num5 * 0.35f - (1f - liquid) * (0.08f + q * 0.03f)) * dt);
             _frost = Mathf.Clamp01(_frost + (num6 * 0.09f - (1f - num4 * ice) * 0.02f) * dt);
-            Glass.SetFloat("_Wetness", _wet);
-            Glass.SetFloat("_Film", _wet * Mathf.Clamp01((spd - 90f) / 110f));   // from 320 km/h it turns into a film
-            Glass.SetFloat("_Frost", _frost * 0.35f * frostReach);
-            Glass.SetFloat("_FrostWhite", frostWhite);
-            Glass.SetFloat("_Refract", refract);
-            Glass.SetMatrix("_AcW2L", W2L);
-            Glass.SetMatrix("_AcL2W", frame.localToWorldMatrix);
-            Glass.SetVector("_EyeL", EyeL);
+            Glass.SetFloat(ID._Wetness, _wet);
+            Glass.SetFloat(ID._Film, _wet * Mathf.Clamp01((spd - 90f) / 110f));   // from 320 km/h it turns into a film
+            Glass.SetFloat(ID._Frost, _frost * 0.35f * frostReach);
+            Glass.SetFloat(ID._FrostWhite, frostWhite);
+            Glass.SetFloat(ID._Refract, refract);
+            Glass.SetMatrix(ID._AcW2L, W2L);
+            Glass.SetMatrix(ID._AcL2W, frame.localToWorldMatrix);
+            Glass.SetVector(ID._EyeL, EyeL);
             Color sc = sun != null && sun.isActiveAndEnabled ? sun.color * sun.intensity : Color.black;
             Vector3 sl = sun != null ? frame.InverseTransformDirection(-sun.transform.forward) : Vector3.up;
-            Glass.SetVector("_SunL", sl);
-            Glass.SetColor("_SunCol", sc);
+            Glass.SetVector(ID._SunL, sl);
+            Glass.SetColor(ID._SunCol, sc);
             Color amb = RenderSettings.ambientSkyColor;
-            Glass.SetColor("_FrostCol", new Color(0.86f, 0.9f, 0.95f) * Mathf.Clamp((sc.grayscale * 0.35f + amb.grayscale * 0.8f), 0.03f, 1.2f));
+            Glass.SetColor(ID._FrostCol, new Color(0.86f, 0.9f, 0.95f) * Mathf.Clamp((sc.grayscale * 0.35f + amb.grayscale * 0.8f), 0.03f, 1.2f));
         }
 
         // ---------- brush meshes (clip coordinates) ----------
@@ -440,7 +440,6 @@ namespace NoAtmoFX
     class WetGlassPass : ScriptableRenderPass
     {
         readonly NOCWetGlass _w;
-        readonly ProfilingSampler _prof = new ProfilingSampler("NOClouds wet glass");
         public WetGlassPass(NOCWetGlass w) { _w = w; renderPassEvent = RenderPassEvent.AfterRenderingTransparents; }
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
@@ -449,7 +448,7 @@ namespace NoAtmoFX
             var desc = cd.cameraTargetDescriptor;
             int w = Mathf.Max(1, desc.width / 2), h = Mathf.Max(1, desc.height / 2);
             var cmd = CommandBufferPool.Get("NOClouds wet glass");
-            using (new ProfilingScope(cmd, _prof))
+            using (new ProfilingScope(cmd, Perf.Glass))
             {
                 if (_w.SceneRT == null || _w.SceneRT.width != w || _w.SceneRT.height != h)
                 {
@@ -459,8 +458,8 @@ namespace NoAtmoFX
                 }
                 var color = cd.renderer.cameraColorTargetHandle;
                 cmd.Blit(color, _w.SceneRT);
-                _w.Glass.SetTexture("_SceneTex", _w.SceneRT);
-                _w.Glass.SetVector("_SceneTex_TS", new Vector4(1f / w, 1f / h, w, h));
+                _w.Glass.SetTexture(ID._SceneTex, _w.SceneRT);
+                _w.Glass.SetVector(ID._SceneTex_TS, new Vector4(1f / w, 1f / h, w, h));
                 cmd.SetRenderTarget(color, cd.renderer.cameraDepthTargetHandle);
                 foreach (var r in _w.Renderers)
                 {

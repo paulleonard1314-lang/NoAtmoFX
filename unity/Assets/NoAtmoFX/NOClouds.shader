@@ -3,7 +3,7 @@
 //   base  = condensation level (humid air -> low base)      cumulus top = instability
 //   types = shallow/congestus cumulus, cumulonimbus (very unstable + humid), stratus/stratocumulus (humid + stable),
 //           altocumulus/altostratus (humidity aloft), cirrus (high 2D streaks)
-// Passes: 0 raymarch | 1 composite | 2 map A | 3 warp | 4 map B | 5 map C | 6 shadow | 7 shadow depth | 8 probe | 9 Cb map | 10 rays | 11 rays (add) | 12 light shafts (volume) | 13 shafts (add) | 14 rain fog | 15 shafts (temporal average)
+// Passes: 0 raymarch | 1 composite | 2 map A | 3 warp | 4 map B | 5 map C | 6 shadow | 7 shadow depth | 8 probe | 9 Cb map | 10 rays | 11 rays (add) | 12 light shafts (volume) | 13 shafts (add) | 14 rain fog | 15 shafts (temporal average) | 16 temporal march (sparse) | 17 temporal reconstruct | 18 cloud footprint | 19 jump flood | 20 footprint distance
 // Anti-tiling: each noise layer has its own rotation and period, plus domain warping and 3D turbulence.
 Shader "Hidden/NOClouds"
 {
@@ -51,10 +51,13 @@ Shader "Hidden/NOClouds"
         float _PerHum, _PerIns, _PerCl, _PerCell, _PerWarp, _PerTurb, _PerCb, _PerS, _PerD;
         float _Hum, _Ins, _BaseRef, _BaseVar, _CoverScale, _Cirrus, _MidAmt;
         float _FrontType, _FrontPos, _FrontWidth;   // 0 none, 1 cold, 2 warm; position along the wind (m, relative to _G)
-        float _Density, _Erosion, _Dome, _Billow, _Soft;
+        float _Density, _Erosion, _Dome, _Billow, _Soft, _BaseRough;
         float _Warp, _Turb, _Stretch, _SizeMix, _Anvil, _AnvilShift, _Shear, _Veer;
         float2 _WindDir;
         float _Steps, _LightSteps, _MinStep, _StepGrowth, _MaxStep, _MaxDist;
+        float _LightLod;                  // 1: cheaper light (half the steps, no fine detail) far away and deep inside clouds
+        sampler2D _NOCFoot; float _FootOn;  // distance (m) from each column to the nearest column that can hold cloud
+        float _JfaStep;
         float _Absorb, _LightAbsorb, _G1, _G2, _GMix, _Powder, _PowderK;
         float _MsA, _MsB, _Exposure, _Tonemap;
         float3 _SunDir; float4 _SunCol; float4 _AmbTop; float4 _AmbBottom;
@@ -62,6 +65,9 @@ Shader "Hidden/NOClouds"
         float _Debug, _Frame, _Jitter, _UseDepth;
         // atmosphere: lightning (camera-relative position + intensity), rain, god rays
         float4 _FlashP; float4 _FlashCol;
+        float _Rainbow, _Glory;
+        // mountain fog: height map around the camera (r terrain, g valley floor, b ridge level; metres above sea)
+        sampler2D _OroTex; float4 _OroC, _OroG, _OroW; float _OroOn, _OroTop, _VFog, _CapFog, _MarchBottom;
         float _RainOn, _RainVis; float3 _WindVel; float _WetDark; float _Deck, _Supercell;
         float2 _SunUV; float _RaysAmt, _RaysOn;
 
@@ -269,6 +275,8 @@ Shader "Hidden/NOClouds"
             float bil = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 
             float d = 0, an = 0, post = 1, wallD = 0;
+            // soft transitions are at least two march steps wide, or they turn into contour bands (slices) at range
+            float bstp = 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep);
 
             // cumulus: cells stretched by the wind, dome, billows
             if (inCu)
@@ -284,7 +292,7 @@ Shader "Hidden/NOClouds"
                 const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), YY = float3(0.25, 0.66, 0.12);
                 const float3 KK = float3(0.1, 0.6, 0.37), FR = float3(0.7, 0.6, 0.45), HS = float3(1.0, 0.6, 0.35);
                 float fs = 1 + length(p) * 1e-4 * _FarSoft;   // softer edge at range (FarSoftness)
-                [unroll] for (int ic = 0; ic < 3; ic++)
+                [loop] for (int ic = 0; ic < 3; ic++)   // not unrolled: keeps the shader compile time down
                 {
                     // SizeMix: how much medium/small clouds show up (0 = large only; 0.7 = default)
                     float fr = FR[ic] * (ic == 0 ? 1 : saturate(_SizeMix / (ic == 2 ? 0.7 : 0.4)));
@@ -312,7 +320,11 @@ Shader "Hidden/NOClouds"
                         float skn = 1 - q;
                         float Htop = Hc * pow(saturate(1 - q * q), 0.8);           // bell-shaped dome
                         float Fm = Htop - z0 + (bil - 0.48) * _Billow * Hc * 0.5 * saturate(skn * 3);
-                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs);
+                        // underside of THIS cloud: a little above the layer base, curving up toward the edge, soft
+                        // (per cloud, so overlapping clouds do not cut each other into slices)
+                        float lift = _BaseRough * (min(0.12 * Hc, 180) * h2.z + 0.22 * Hc * q * q * q);
+                        float dk = saturate(Fm / ((_Soft * Hc * 2 + 1) * fs)) * saturate(skn * 4 / fs)
+                                 * saturate((z0 - lift) / max((40 + _BaseRough * 0.1 * Hc) * fs, bstp));
                         if (dk > d) { d = dk; hAmb = saturate(z0 / max(Hc, 1)); }
                     }
                 }
@@ -321,9 +333,14 @@ Shader "Hidden/NOClouds"
             if (inSt)
             {
                 float hs = (alt - base) / stTh;
-                float prof = saturate(hs / 0.15) * saturate((1 - hs) / 0.3);
-                float Fs = st * prof + (ns - 0.5) * 0.5 + (bil - 0.48) * 0.25 - 0.3;
-                float ds = saturate(Fs / 0.15) * 0.55;
+                // nearly flat base, lumpy top (stratocumulus): only the top follows the billows, so the deck no longer
+                // bends up and down as a whole like a ribbon; the wide noise only opens gaps and thins the deck a little
+                // the base has its own small waves (0..~140 m, 2-4 km), from a noise unrelated to the top's
+                float bU = saturate(0.6 * t2(rot(x, 2.1) / 2600, 0.27).g + 0.4 * t2(rot(x, -0.8) / 4100, 0.81).b - 0.25) * 200;
+                float fB = saturate((alt - base - bU) / max(80, bstp));
+                float Ft = (1 - hs) * 1.2 + (bil - 0.48) * 1.1 + (s.r - 0.67) * 0.35 + (ns - 0.5) * 0.15 - 0.25;
+                float gap = saturate((st + (ns - 0.5) * 0.6 - 0.35) / 0.2);
+                float ds = saturate(Ft * 1.2 * stTh / max(100, bstp)) * fB * gap * 0.55;
                 if (ds > d) { d = ds; hAmb = hs; }
             }
             // altocumulus / altostratus: mid layer (low coverage = patches; high = sheet)
@@ -360,7 +377,7 @@ Shader "Hidden/NOClouds"
                 float z0 = alt - base;
                 float Hmax = max(_CbTop - base, 1500);
                 float pc = saturate(cb * 1.6);
-                [unroll] for (int kc = 0; kc < 4; kc++)
+                [loop] for (int kc = 0; kc < 4; kc++)   // not unrolled: keeps the shader compile time down
                 {
                     float2 g = cc + oc + float2(kc & 1, kc >> 1);
                     float4 h = hash42(g + 91.3);
@@ -552,16 +569,88 @@ Shader "Hidden/NOClouds"
             return dm;
         }
 
+        // ---------- mountain fog (own layer; the normal clouds are not touched) ----------
+        // valley fog: fills real valleys up to a flat level; upslope cloud: hugs windward slopes/peaks near the cloud base
+        float mountainFog(float3 p, out float hF)
+        {
+            hF = 0;
+            float alt = altOf(p);
+            if (alt > _OroTop) return 0;
+            float2 uv = (p.xz + _OroC.xy) * _OroC.z + 0.5;
+            if (any(uv < 0.02) || any(uv > 0.98)) return 0;
+            float edge = saturate(min(min(uv.x, uv.y), min(1 - uv.x, 1 - uv.y)) * 12 - 0.24);
+            // the game's world is flat and the clouds sit on a sphere: lift the terrain into cloud altitude
+            float curv = dot(p.xz, p.xz) / (2 * _R);
+            float4 T = tex2Dlod(_OroTex, float4(uv, 0, 0)) + float4(curv, curv, curv, 0);
+            float hg = alt - T.r;
+            if (hg < -30) return 0;
+            float2 wx = p.xz + _OroG.xy;   // fixed to the ground (does not drift with the cloud wind)
+            float n1 = t2(wx / 5000, 0.23).r, n2 = t2(wx / 2000, 0.61).g;
+            float stp = max(30, 2 * clamp(length(p) * _StepGrowth, _MinStep, _MaxStep));
+            float d = 0;
+            if (_VFog > 0.002)
+            {
+                float relief = T.b - T.g;
+                float depth = min(relief * 0.45, 40 + 200 * min(_VFog, 1.5)) * saturate((relief - 150) / 250) * saturate((n1 - 0.3) / 0.3);
+                float top = T.g + depth + (n2 - 0.5) * 30;
+                float dv = saturate((top - alt) / stp) * saturate(_VFog * 2) * saturate(depth / 40) * 0.8;
+                if (dv > d) { d = dv; hF = 0.3 + 0.6 * saturate(1 - (top - alt) / max(depth, 1)); }
+            }
+            if (_CapFog > 0.002)
+            {
+                float e = _OroW.z, du = _OroC.z * e;
+                float hx = tex2Dlod(_OroTex, float4(uv + float2(du, 0), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(du, 0), 0, 0)).r;
+                float hz = tex2Dlod(_OroTex, float4(uv + float2(0, du), 0, 0)).r - tex2Dlod(_OroTex, float4(uv - float2(0, du), 0, 0)).r;
+                float up = dot(float2(hx, hz) / (2 * e), _OroW.xy);   // terrain slope along the wind (> 0 = air is lifted)
+                float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+                float base = tex2Dlod(_WxB, float4(uvW, 0, 0)).r * 8000;
+                float lift = saturate(up / 0.1) * saturate((T.r - (base - 700)) / 400);
+                float th = (120 + 280 * lift) * (0.6 + 0.8 * n2);
+                float dc = lift * saturate(_CapFog) * saturate((th - hg) / max(stp, 40)) * saturate((n1 + n2 - 0.7) / 0.4) * 0.8;
+                if (dc > d) { d = dc; hF = saturate(hg / th); }
+            }
+            return d * edge * _Density;
+        }
+
+        // highest cloud top possible over this column (cumulus/stratus, mid layer, Cb), from the weather maps.
+        // A smooth envelope, so the empty air above it can be crossed in long jumps (see fragMarch).
+        float topEnvelope(float3 p)
+        {
+            float2 uvW = (p.xz + _GD) / (2 * _WExt) + 0.5;
+            if (any(uvW < 0.002) || any(uvW > 0.998)) return 0;
+            float2 su = smoothUV(uvW, _WTS);
+            float4 A = tex2Dlod(_WxA, float4(su, 0, 0));
+            float4 B = tex2Dlod(_WxB, float4(su, 0, 0));
+            float4 C = tex2Dlod(_WxC, float4(su, 0, 0));
+            float base = B.r * 8000, cuTh = A.g * 8000;
+            float mid = max(C.r, _Deck), midBase = lerp(C.b * 8000, max(base + cuTh * 0.6, 2400), _Deck * 0.5);
+            float top = base + max(cuTh * 1.2, 950) + 200;
+            if (mid > 0.01) top = max(top, midBase + (250 + 650 * mid + 1500 * _Deck * _Deck) * 1.3 + 150);
+            if (A.b > 0.003) top = _VolTop;
+            return top;
+        }
+
         float density(float3 p, bool cheap, out float hAmb)
         {
-            if (_NkN < 0.5) return densityBase(p, cheap, hAmb);
-            float boost;
-            float3 p0 = nukeWarp(p, boost);
+            // one densityBase call site only (it is huge: every extra call site multiplies the compile time)
+            bool nk = _NkN >= 0.5;
+            float boost = 1;
+            float3 p0 = p;
+            if (nk) p0 = nukeWarp(p, boost);
             float d = 0; hAmb = 0;
             if (boost > 0.001) d = densityBase(p0, cheap, hAmb) * boost;
-            float hN;
-            float dn = nukeCond(p, hN) * _Density;
-            if (dn > d) { d = dn; hAmb = hN; }
+            if (nk)
+            {
+                float hN;
+                float dn = nukeCond(p, hN) * _Density;
+                if (dn > d) { d = dn; hAmb = hN; }
+            }
+            if (_OroOn > 0.5)
+            {
+                float hF;
+                float df = mountainFog(p, hF);
+                if (df > d) { d = df; hAmb = hF; }
+            }
             return d;
         }
 
@@ -592,7 +681,9 @@ Shader "Hidden/NOClouds"
             float3 q = p + up * (drop + 400) - float3(_WindVel.x, 0, _WindVel.z) * (drop / 9);
             float hA;
             // two heights averaged: the eroded cloud edge alone made the mask flicker on and off (speckles)
-            float dB = 0.5 * (densityBase(q, true, hA) + densityBase(q + up * 500, true, hA)) / max(_Density, 1e-4);
+            float dB = 0;
+            [loop] for (int kr = 0; kr < 2; kr++) dB += densityBase(q + up * (500 * kr), true, hA);   // one call site
+            dB *= 0.5 / max(_Density, 1e-4);
             // far away the march steps are km long: wider, softer mask so it does not turn into speckled drizzle
             float far = saturate(length(p) / 12000);
             // curtain like the reference photos: thin, almost vertical streaks (slightly slanted with height)
@@ -632,16 +723,51 @@ Shader "Hidden/NOClouds"
             float2 h = sph(_SunDir, _PlanetC - p, _R - 300);
             return (h.y > h.x && h.x > 0) ? 1 : 0;
         }
-        float lightMarch(float3 p)
+        // ---------- optics of water drops ----------
+        // rainbow, by angle from the antisolar point (deg): primary ~42 deg (red outside), secondary ~51 deg (reversed, ~43%),
+        // brighter sky inside the primary; Alexander's dark band in between is simply what is left
+        float3 bowCol(float th)
+        {
+            float3 a = (th - float3(42.3, 41.6, 40.8)) / 0.55;
+            float3 b = (th - float3(50.3, 51.1, 52.0)) / 0.8;
+            return exp(-a * a) + 0.43 * exp(-b * b) + 0.06 * smoothstep(28, 40.5, th) * step(th, 41.5);
+        }
+        // glory: coloured rings a few degrees around the antisolar point (red rings wider) + white cloudbow ~41 deg
+        float3 gloryCol(float th)
+        {
+            float3 r = 0.5 + 0.5 * cos(6.2832 * th / float3(2.6, 2.25, 1.95));
+            float3 g = exp(-th / 4) * (0.6 * r + 0.4 * exp(-th * th / 1.5)) * step(th, 15);
+            float3 c = (th - float3(41.2, 40.3, 39.5)) / 2.5;
+            return g + 0.15 * exp(-c * c);
+        }
+        // the sun reaches this point (opacity depth map; outside the map: no, so effects that need it stay rare)
+        float sunLitMap(float3 p)
+        {
+            if (_ShDOn < 0.5) return 0;
+            float3 d0 = p - _ShO;
+            float2 uv = float2(dot(d0, _ShR) / dot(_ShR, _ShR), dot(d0, _ShU) / dot(_ShU, _ShU));
+            if (!(all(uv > 0.01) && all(uv < 0.99))) return 0;
+            float sh = tex2Dlod(_NOCShD, float4(uv, 0, 0)).r;
+            return (1 - saturate((sh - dot(d0, normalize(_SunDir))) / 300)) * (1 - planetShadow(p));
+        }
+        // lod: half the samples, each standing for two of the normal steps (same total length, so the same
+        // brightness on average), and no fine detail; used only far away and deep inside a cloud
+        float lightMarch(float3 p, bool lod)
         {
             if (planetShadow(p) > 0.5) return 50;
             float tau = 0, hA;
             float3 q = p;
-            [loop] for (int i = 0; i < (int)_LightSteps; i++)
+            int nL = (int)_LightSteps;
+            int n = lod ? (nL + 1) / 2 : nL;
+            [loop] for (int i = 0; i < n; i++)
             {
-                float stp = 60 * (1 + i * 1.2);
+                int j = lod ? 2 * i : i;
+                float a = 60 * (1 + j * 1.2);
+                float b = (lod && j + 1 < nL) ? 60 * (1 + (j + 1) * 1.2) : 0;
+                float stp = a + b;
+                // one call site (density is huge: every extra call site multiplies the compile time)
+                tau += density(q + _SunDir * (a + 0.5 * b), lod || i > 1, hA) * stp;
                 q += _SunDir * stp;
-                tau += density(q, i > 1, hA) * stp;
             }
             // cloud-on-cloud through the opacity depth map: is the point "behind" (away from the sun)
             // the opaque surface of its column? The first ~670 m are already covered by the short steps above.
@@ -714,20 +840,22 @@ Shader "Hidden/NOClouds"
             return lerp(1, f, saturate(_FogAmt));
         }
 
-        float4 fragMarch (v2f i) : SV_Target
+        // uv/ray/pix: the screen point this ray is for (pix only seeds the jitter); dRep = distance to the cloud
+        // (opacity-weighted) for temporal reprojection, 50 km when the ray met no cloud
+        float4 marchCore (float2 uv, float3 ray, float2 pix, out float dRep)
         {
-            float rl = length(i.ray);
-            float3 rd = i.ray / rl;
+            float rl = length(ray);
+            float3 rd = ray / rl;
             float sceneT = 1e9;
             if (_UseDepth > 0)
             {
-                float raw = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv);
+                float raw = SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uv, 0, 0));
                 float eye = LinearEyeDepth(raw);
                 if (eye < _ProjectionParams.z * 0.999) sceneT = eye * rl;
             }
 
             float2 outer = sph(rd, _PlanetC, _R + _VolTop);
-            float2 inner = sph(rd, _PlanetC, _R + _Bottom);
+            float2 inner = sph(rd, _PlanetC, _R + _MarchBottom);   // 200 m, lower only while mountain fog is on
             float camAlt = length(_PlanetC) - _R;
             float T = 1;
             float3 col = 0;
@@ -739,13 +867,13 @@ Shader "Hidden/NOClouds"
                 t1 = outer.y;
                 if (inner.y > inner.x)
                 {
-                    if (camAlt < _Bottom) t0 = max(t0, inner.y);
+                    if (camAlt < _MarchBottom) t0 = max(t0, inner.y);
                     else if (inner.x > 0) t1 = min(t1, inner.x);
                 }
                 t1 = min(min(t1, sceneT), _MaxDist);
 
                 float cosT = dot(rd, _SunDir);
-                float jit = ign(i.pos.xy + (_Jitter > 0 ? _Frame * 5.588238 : 0));
+                float jit = ign(pix + (_Jitter > 0 ? _Frame * 5.588238 : 0));
                 float t = t0 + clamp(t0 * _StepGrowth, _MinStep, _MaxStep) * jit;
                 bool skipped = false;
                 int fine = 0;
@@ -760,7 +888,10 @@ Shader "Hidden/NOClouds"
                     if (dens > 0.0001 && skipped) { t -= stp; skipped = false; fine = 3; continue; }
                     if (dens > 0.0001)
                     {
-                        float tauL = lightMarch(p) * (0.5 + _ShDark);   // ShadowDarkness: 0.5 = original look
+                        // cheaper light where it cannot be seen: deep inside (what is left of this ray weighs < ~25%) or far away;
+                        // the switch is dithered per pixel so there is no line where it changes
+                        bool lodL = _LightLod > 0.5 && (T < 0.12 + 0.15 * jit || t > 18000 + 10000 * jit);
+                        float tauL = lightMarch(p, lodL) * (0.5 + _ShDark);   // ShadowDarkness: 0.5 = original look
                         float powder = lerp(1, 1 - exp(-dens * _PowderK), _Powder);
                         float3 L = 0; float a = 1, b = 1, c = 1;
                         [unroll] for (int o = 0; o < 3; o++)
@@ -773,6 +904,13 @@ Shader "Hidden/NOClouds"
                         // water-laden cloud: dark underneath and on the sides (sunlit top stays bright)
                         float wd = min(wetness(p), 1) * _WetDark * pow(1 - 0.9 * saturate(hA), 1.5);
                         float3 S = _SunCol.rgb * L * powder * 12.566 * exp(-wd * 1.2) + lerp(_AmbBottom.rgb, _AmbTop.rgb, hh) * ao * lerp(1, 0.5, saturate(wd));
+                        // glory/cloudbow: only on the sunlit top of water clouds close below you (fades by ~8 km); rare by geometry
+                        if (_Glory > 0 && cosT < -0.6)
+                        {
+                            float thg = degrees(acos(saturate(-cosT)));
+                            float gw = saturate(hA * 3 - 1.5) * saturate((8000 - t) / 4000) * saturate((camAlt - altOf(p) - 100) / 300);
+                            if (gw > 0) S += _SunCol.rgb * gloryCol(thg) * (exp(-tauL) * 0.45 * _Glory * gw);
+                        }
                         if (_FlashP.w > 0)   // lightning: the cloud lights up from inside around the flash
                         {
                             float fd = length(p - _FlashP.xyz);
@@ -793,7 +931,45 @@ Shader "Hidden/NOClouds"
                         fine = 2;
                     }
                     else if (fine > 0) { t += stp; fine--; }
-                    else { t += stp * 2; skipped = true; }
+                    else
+                    {
+                        // empty air: far above every possible cloud top (e.g. flying at 7 km) jump straight down to
+                        // near it, otherwise the steps ran out before reaching distant clouds (a ring of clouds around you)
+                        float sk = stp * 2;
+                        // nuclear blasts only change the clouds inside the shock front and the ring/skirt discs:
+                        // the jumps stay outside those (they used to be switched off everywhere while a blast was open)
+                        float dN = 1e9;
+                        [loop] for (int ni = 0; ni < (int)_NkN; ni++)
+                        {
+                            float4 NP = _NkP[ni], NS = _NkS[ni], NC = _NkC[ni];
+                            dN = min(dN, length(p - NP.xyz) - NS.x - 300);
+                            float rM = max(max(_NkRg[ni * 4].y, _NkRg[ni * 4 + 1].y), max(_NkRg[ni * 4 + 2].y, _NkRg[ni * 4 + 3].y));
+                            if (rM >= 1) dN = min(dN, length(p.xz - NC.xz) - rM * 1.3 - 300);
+                        }
+                        if (dN > 0)
+                        {
+                            float dn = max(0, -dot(rd, normalize(p - _PlanetC)));   // how fast the ray goes down
+                            // empty-space skipping: no cloud can be closer (sideways) than the footprint distance map says;
+                            // with mountain fog on, only above its top and without diving into it
+                            float alt = altOf(p);
+                            if (_FootOn > 0.5 && (_OroOn < 0.5 || alt > _OroTop + 150))
+                            {
+                                float2 uvF = (p.xz + _GD) / (2 * _WExt) + 0.5;
+                                if (all(uvF > 0.002) && all(uvF < 0.998))
+                                {
+                                    float D = tex2Dlod(_NOCFoot, float4(uvF, 0, 0)).r;
+                                    float jm = min(D / max(length(rd.xz), 0.1), 6000);
+                                    if (_OroOn > 0.5) jm = min(jm, (alt - _OroTop - 100) / max(dn, 0.001));
+                                    sk = max(sk, jm);
+                                }
+                            }
+                            float clr = alt - topEnvelope(p);
+                            if (_NkN < 0.5 && clr > 150)   // the rings can sit above the normal tops
+                                sk = max(sk, min((clr - 100) / (dn + 0.25), 4000));
+                            sk = max(stp * 2, min(sk, dN));
+                        }
+                        t += sk; skipped = true;
+                    }
                 }
             }
 
@@ -803,6 +979,8 @@ Shader "Hidden/NOClouds"
                 float tEnd = min(min(sceneT, 45000), _MaxDist);
                 float rT = 1; float3 rc = 0;
                 const int RN = 36;
+                float thb = degrees(acos(clamp(-dot(rd, normalize(_SunDir)), -1, 1)));
+                bool bowOn = _Rainbow > 0 && thb > 39 && thb < 55;
                 float jr = 0.5;   // same steps for every pixel: per-pixel jitter turned the curtains into bright speckles
                 float tr0 = 0;
                 [loop] for (int r = 0; r < RN; r++)
@@ -822,6 +1000,8 @@ Shader "Hidden/NOClouds"
                     float3 lc = lerp(_AmbBottom.rgb, _AmbTop.rgb, saturate(bse / 2500)) * lerp(1, 0.25, saturate(_ShDark * 1.4)) * lerp(1, 0.5, saturate(_WetDark))
                               + _SunCol.rgb * 0.01 * (1 - planetShadow(p));   // same colour as the darkest (wet) cloud base
                     if (_FlashP.w > 0) lc += _FlashCol.rgb * _FlashP.w * 0.5 * exp(-length(p - _FlashP.xyz) / 2500);
+                    // rainbow: needs heavy rain (big drops) that the sun actually reaches, at ~42/51 deg from the antisolar point
+                    if (bowOn) lc += _SunCol.rgb * bowCol(thb) * (0.3 * _Rainbow * saturate((rr - 0.15) / 0.3) * sunLitMap(p));
                     rc += rT * lc * (1 - trn);
                     rT *= trn;
                     if (rT < 0.02) break;
@@ -838,6 +1018,7 @@ Shader "Hidden/NOClouds"
             float tci;
             float4 ci = cirrus(rd, min(sceneT, 400000), tci);
             float fd = wsum > 0 ? depthW / wsum : (ci.a > 0 ? tci : 1);
+            dRep = wsum > 0 ? depthW / wsum : (ci.a > 0.05 ? tci : 50000);
             if (camAlt < _CiAlt) { col += T * ci.rgb; T *= (1 - ci.a); }
             else { col = ci.rgb + (1 - ci.a) * col; T *= (1 - ci.a); }
 
@@ -846,6 +1027,195 @@ Shader "Hidden/NOClouds"
             float f = fogFactor(fd);
             col = lerp(_FogCol.rgb * (1 - T), col, f);
             return float4(col, T);
+        }
+
+        // ---------- footprint of the clouds (empty-space skipping) ----------
+        // 512x512 over the same area as the weather maps. A texel is "cloud" when ANY point of it could hold
+        // cloud at any height: weather read as the maximum over the texel and its neighbours, cumulus cells grown by
+        // the largest billow, warp and turbulence the shader can apply. Then a jump flood gives each texel the
+        // distance to the nearest cloud texel, minus a safety margin: the march can jump that far sideways.
+        float4 fragFoot (v2f i) : SV_Target
+        {
+            float2 uv = i.uv;
+            if (any(uv < 1.5 / 512) || any(uv > 1 - 1.5 / 512)) return float4(uv, 0, 1);   // beyond the maps: unknown
+            float covM = 0, cbM = 0, stM = 0, midM = 0;
+            float2 dwMin = 1e9, dwMax = -1e9;
+            [unroll] for (int a = 0; a < 4; a++)
+            [unroll] for (int b = 0; b < 4; b++)
+            {
+                float2 u = uv + (float2(a, b) - 1.5) / 1024;    // the 2x2 weather texels of this texel and one more around
+                float4 A = tex2Dlod(_WxA, float4(u, 0, 0));
+                float4 B = tex2Dlod(_WxB, float4(u, 0, 0));
+                float4 C = tex2Dlod(_WxC, float4(u, 0, 0));
+                float2 dw = tex2Dlod(_WarpTex, float4(u, 0, 0)).rg;
+                covM = max(covM, A.r); cbM = max(cbM, A.b); stM = max(stM, B.g);
+                midM = max(midM, max(C.r, _Deck * (0.8 + 0.2 * B.b)));
+                dwMin = min(dwMin, dw); dwMax = max(dwMax, dw);
+            }
+            bool occ = cbM > 0.009 || stM > 0.009 || midM > 0.009;
+            if (!occ && covM > 0.009)
+            {
+                float2 x = mapXZ(uv);
+                float2 perp = float2(-_WindDir.y, _WindDir.x);
+                float along = dot(x, _WindDir), across = dot(x, perp);
+                float2 cx = _WindDir * (along / _Stretch) + perp * across;
+                float2 dwC = (dwMin + dwMax) * 0.5;
+                float dwR = length(dwMax - dwMin) * 0.5 + 1;
+                float turbR = 0.52 * 0.25 * abs(_Turb) * 1.415 + 1;           // largest turbulence push
+                float halfD = 1.415 * _WExt / 512 * max(1, 1 / max(_Stretch, 0.1));   // half diagonal of this texel
+                float bl = 1 + 0.52 * max(_Billow, 0);                         // largest billow growth of a cell
+                float rs = 0.7 + 0.5 * covM;
+                const float3 PER = float3(1.0, 0.43, 0.19), ANG = float3(0.27, 1.71, -0.9), FR = float3(0.7, 0.6, 0.45);
+                [loop] for (int ic = 0; ic < 3; ic++)
+                {
+                    float fr = FR[ic] * (ic == 0 ? 1 : saturate(_SizeMix / (ic == 2 ? 0.7 : 0.4)));
+                    if (fr <= 0.01) continue;
+                    float per = _PerCell * PER[ic];
+                    float sp = sqrt(PER[ic]);
+                    float2 u0 = rot(cx + dwC * sp, ANG[ic]) / per + float2(7.1, 3.3) * ic;
+                    float mg = (halfD + (dwR + turbR) * sp) / per + 0.01;
+                    float pr = saturate(covM * fr * 1.5);
+                    float reach = mg + 0.63 * bl;
+                    float2 g0 = floor(u0 - reach - 0.85), g1 = floor(u0 + reach - 0.15);
+                    if (g1.x - g0.x > 6 || g1.y - g0.y > 6) { occ = true; break; }
+                    int nx = (int)(g1.x - g0.x), ny = (int)(g1.y - g0.y);
+                    [loop] for (int gy = 0; gy <= ny; gy++)
+                    {
+                        [loop] for (int gx = 0; gx <= nx; gx++)
+                        {
+                            float2 g = g0 + float2(gx, gy);
+                            float4 h = hash42(g + 31.7 * ic);
+                            float pw = saturate((pr - h.z) / 0.15);
+                            if (pw <= 0) continue;
+                            float4 h2 = hash42(g + float2(17.3, 5.1) + 31.7 * ic);
+                            float r = (0.22 + 0.3 * h2.y) * rs * sqrt(pw);
+                            if (length(u0 - (g + 0.15 + 0.7 * h.xy)) < r * bl + mg) occ = true;
+                        }
+                        if (occ) break;
+                    }
+                    if (occ) break;
+                }
+            }
+            return occ ? float4(uv, 0, 1) : float4(-10, -10, 0, 1);
+        }
+        // jump flood: each texel keeps the nearest cloud texel seen at distance _JfaStep (uv)
+        float4 fragJfa (v2f i) : SV_Target
+        {
+            float2 best = tex2Dlod(_MainTex, float4(i.uv, 0, 0)).rg;
+            float bd = best.x < -1 ? 1e9 : dot(best - i.uv, best - i.uv);
+            [unroll] for (int y = -1; y <= 1; y++)
+            [unroll] for (int x = -1; x <= 1; x++)
+            {
+                float2 u = i.uv + float2(x, y) * _JfaStep;
+                if (any(u < 0) || any(u > 1)) continue;
+                float2 s = tex2Dlod(_MainTex, float4(u, 0, 0)).rg;
+                if (s.x < -1) continue;
+                float d = dot(s - i.uv, s - i.uv);
+                if (d < bd) { bd = d; best = s; }
+            }
+            return float4(best, 0, 1);
+        }
+        // distance (m) to the nearest cloud texel minus the margin: this texel and that one are whole texels (one
+        // diagonal) plus one texel for the rare jump-flood miss
+        float4 fragFootDist (v2f i) : SV_Target
+        {
+            float2 s = tex2Dlod(_MainTex, float4(i.uv, 0, 0)).rg;
+            float tx = 2 * _WExt / 512;
+            if (s.x < -1) return float4(4 * _WExt, 0, 0, 1);
+            return float4(max(0, length(s - i.uv) * 2 * _WExt - tx * 2.42), 0, 0, 1);
+        }
+
+        float4 fragMarch (v2f i) : SV_Target
+        {
+            float d;
+            return marchCore(i.uv, i.ray, i.pos.xy, d);
+        }
+
+        // ---------- temporal reprojection (Quality > Temporal) ----------
+        // Each frame only one pixel of every 2x2 block (or every other pixel, checker) is raymarched into _TFresh;
+        // the reconstruct pass fills the others from the previous image, moved by the camera motion and clamped to
+        // the colours of the fresh neighbours at the same scene distance (so nothing ghosts around the aircraft).
+        Texture2D<uint4> _TFresh;
+        sampler2D _THist;
+        float4 _TSize;      // xy cloud image size (w, h), zw fresh grid size
+        float4 _TMode;      // x step in x (2), y step in y (1 checker, 2 quarter), z phase (frame), w history valid
+        float3 _TPrevBL, _TPrevRx, _TPrevUy, _TPrevF;   // previous frame's frustum (corner rays at depth 1)
+        float3 _TMove;      // camera motion since the previous frame, in the clouds' frame (wind included), m
+
+        // full-res pixel a fresh texel covers this frame
+        int2 tPix(int2 f)
+        {
+            int ph = (int)_TMode.z;
+            if (_TMode.y < 1.5) return int2(f.x * 2 + ((f.y + ph) & 1), f.y);   // checker
+            int2 o = ph == 0 ? int2(0, 0) : ph == 1 ? int2(1, 1) : ph == 2 ? int2(1, 0) : int2(0, 1);
+            return f * 2 + o;
+        }
+        float3 rayAt(float2 uv) { return lerp(lerp(_CornerBL, _CornerBR, uv.x), lerp(_CornerTL, _CornerTR, uv.x), uv.y); }
+
+        uint4 fragMarchT (v2f i) : SV_Target
+        {
+            int2 f = (int2)floor(i.uv * _TSize.zw);
+            int2 q = min(tPix(f), (int2)_TSize.xy - 1);
+            float2 uv = (q + 0.5) / _TSize.xy;
+            float d;
+            float4 c = marchCore(uv, rayAt(uv), q, d);
+            return uint4(f32tof16(c.r) | (f32tof16(c.g) << 16), f32tof16(c.b) | (f32tof16(c.a) << 16), asuint(d), 0);
+        }
+        float4 tUnpack(uint4 u, out float d)
+        {
+            d = asfloat(u.z);
+            return float4(f16tof32(u.x), f16tof32(u.x >> 16), f16tof32(u.y), f16tof32(u.y >> 16));
+        }
+
+        float4 fragReconstruct (v2f i) : SV_Target
+        {
+            int2 q = (int2)floor(i.uv * _TSize.xy);
+            float2 uv = (q + 0.5) / _TSize.xy;
+            float dC = LinearEyeDepth(SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uv, 0, 0)));
+            // fresh texels around q (their pixel positions depend on the phase)
+            int sy = _TMode.y < 1.5 ? 1 : 2;
+            int ph = (int)_TMode.z;
+            int oy = sy == 1 ? 0 : (ph == 1 || ph == 3 ? 1 : 0);
+            int fy0 = (int)floor((q.y - oy) / (float)sy + 0.5);
+            int2 fmax = (int2)_TSize.zw - 1;
+            float4 mn = 1e5, mx = -1e5, acc = 0;
+            float ws = 0, bestW = -1, dBest = 50000;
+            float4 best = 0;
+            [unroll] for (int jy = -1; jy <= 1; jy++)
+            {
+                int fy = clamp(fy0 + jy, 0, fmax.y);
+                int ox = sy == 1 ? ((fy + ph) & 1) : (ph == 1 || ph == 2 ? 1 : 0);
+                int fx0 = (int)floor((q.x - ox) / 2.0 + 0.5);
+                [unroll] for (int jx = -1; jx <= 1; jx++)
+                {
+                    int2 f = int2(clamp(fx0 + jx, 0, fmax.x), fy);
+                    int2 pk = tPix(f);
+                    float dk;
+                    float4 ck = tUnpack(_TFresh.Load(int3(f, 0)), dk);
+                    if (all(pk == q)) return ck;   // marched this frame
+                    float2 uk = (min(pk, (int2)_TSize.xy - 1) + 0.5) / _TSize.xy;
+                    float sk = LinearEyeDepth(SAMPLE_DEPTH_TEXTURE_LOD(_CameraDepthTexture, float4(uk, 0, 0)));
+                    float wd = exp(-abs(sk - dC) / max(min(sk, dC), 1e-3) * 12);
+                    float2 dv = pk - q;
+                    float w = wd * exp(-dot(dv, dv) * 0.35);
+                    acc += ck * w; ws += w;
+                    if (w > bestW) { bestW = w; best = ck; dBest = dk; }
+                    if (wd > 0.5) { mn = min(mn, ck); mx = max(mx, ck); }
+                }
+            }
+            float4 fill = ws > 1e-4 ? acc / ws : best;
+            if (_TMode.w < 0.5 || mx.a < mn.a) return fill;
+            // previous position of the cloud seen through q
+            float3 P = normalize(rayAt(uv)) * dBest + _TMove;
+            float fz = dot(P, _TPrevF);
+            if (fz <= 1e-3) return fill;
+            float3 l = P / fz - _TPrevBL;
+            float2 puv = float2(dot(l, _TPrevRx) / dot(_TPrevRx, _TPrevRx), dot(l, _TPrevUy) / dot(_TPrevUy, _TPrevUy));
+            if (any(puv < 0) || any(puv > 1)) return fill;
+            float4 h = tex2Dlod(_THist, float4(puv, 0, 0));
+            // keep the history inside what the fresh neighbours allow (slightly widened: they sit 1-2 pixels away)
+            float4 ext = (mx - mn) * 0.15 + float4(0.004, 0.004, 0.004, 0.01);
+            return clamp(h, mn - ext, mx + ext);
         }
 
 
@@ -1234,6 +1604,31 @@ Shader "Hidden/NOClouds"
         Pass { CGPROGRAM
             #pragma vertex vert
             #pragma fragment fragShaftsTA
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragMarchT
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragReconstruct
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragFoot
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragJfa
+            #pragma target 4.5
+            ENDCG }
+        Pass { CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragFootDist
             #pragma target 4.5
             ENDCG }
     }

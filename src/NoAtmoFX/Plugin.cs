@@ -11,6 +11,7 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering.Universal;
 
 namespace NoAtmoFX
@@ -18,11 +19,11 @@ namespace NoAtmoFX
     [BepInPlugin("paul.no.clouds", "NoAtmoFX", Version)]   // GUID kept from NO Clouds so existing settings carry over
     public class NOCloudsPlugin : BaseUnityPlugin
     {
-        public const string Version = "1.0.1";
+        public const string Version = "1.4.0";
         internal static ManualLogSource Log;
 
         // General
-        ConfigEntry<bool> _on, _hideGame, _debug, _jitter, _useDepth, _gameWeather;
+        internal ConfigEntry<bool> _on; ConfigEntry<bool> _hideGame, _debug, _jitter, _useDepth, _gameWeather;
         ConfigEntry<int> _event;
         ConfigEntry<float> _ciTile;
         ConfigEntry<bool> _ownCirrus;
@@ -33,12 +34,12 @@ namespace NoAtmoFX
         internal NOCWetGlass Wet; WetGlassPass _gpass; AssetBundle _ab;
         internal NOCNukes Nukes; internal NOCAtmos Atmos; AtmosPass _apass; internal bool RaysActive, ShaftsActive; internal int DownscaleNow = 2; internal RenderTexture CbRT, ReflCloudRT; internal Vector2 GDLast;
         internal float ProbeCloudAt, ProbeTauAt; internal bool ProbeAtValid;
-        ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
+        ConfigEntry<int> _atNearRain; ConfigEntry<bool> _atShafts; ConfigEntry<float> _atRainVis, _atRainbow, _atGlory, _atLightning, _atTurb, _atRays, _atMoon, _wetDark, _stormDim, _atFog, _atShafts2; ConfigEntry<bool> _keepSun; ConfigEntry<float> _deck; ConfigEntry<int> _lang; ConfigEntry<float> _supercell; ConfigEntry<bool> _waterLight; ConfigEntry<int> _waterRefl; ConfigEntry<bool> _probeClouds; ConfigEntry<float> _skyCirrusCap; ConfigEntry<float> _maxCloudSpeed;
         internal RenderTexture ProbeRT;
         // Layer
         ConfigEntry<float> _baseOffset, _manualBase, _planetR;
         // Shape
-        ConfigEntry<float> _coverage, _density, _erosion, _topDensity, _dome, _billow, _soft, _shear;
+        ConfigEntry<float> _coverage, _density, _erosion, _topDensity, _dome, _billow, _soft, _shear, _baseRough;
         // Scale
         ConfigEntry<float> _perC, _perCell, _perS, _perD, _windMul, _windSpeed;
         ConfigEntry<float> _blur, _farSoft, _shDark; ConfigEntry<float> _warp, _perWarp, _turb, _perTurb, _sizeMix, _stretch, _veer, _evolve;
@@ -51,17 +52,20 @@ namespace NoAtmoFX
         ConfigEntry<float> _absorb, _lightAbsorb, _g1, _g2, _gMix, _powder, _powderK, _sunMul, _ambMul, _exposure, _msA, _msB, _sunWhite, _fogAmt;
         ConfigEntry<int> _tonemap;
         // Quality
-        ConfigEntry<int> _steps, _lightSteps, _downscale;
+        ConfigEntry<int> _steps, _lightSteps, _downscale, _lightLod;
+        ConfigEntry<bool> _emptySkip;
         ConfigEntry<float> _minStep, _stepGrowth, _maxStep, _maxDist;
+        ConfigEntry<bool> _mapSlicing, _perfMeter; ConfigEntry<int> _shEvery, _temporal; internal ConfigEntry<string> _preset;
 
         Material _mat;
         CloudPass _pass;
         WaterPass _wpass;
         ShadowPass _spass;
-        internal RenderTexture WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT;
+        internal RenderTexture WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, FootA, FootB, FootD;
         internal int ShDFrame = -1; internal Camera ShDCam;
         internal int WxFrame = -1;
         internal RenderTexture CloudRT;
+        internal RenderTexture CloudImg;   // the cloud image composited this frame (CloudRT, or the temporal history)
         internal int RTFrame = -1;
         internal Material Mat => _mat;
         internal float WExtNow => _maxDist.Value;
@@ -76,9 +80,10 @@ namespace NoAtmoFX
         Component _cloudLayer;
         object _weatherSet;
         readonly List<Renderer> _hidden = new List<Renderer>();
-        double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; Vector3 _windS; float _windLogT = -100;
-        float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; bool _wxInit, _frontInit;
-        float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; int _front;
+        internal double _windX, _windZ, _evolveT; Vector2 _windDirL; bool _windDirSet; internal Vector3 _windS; float _windLogT = -100;
+        internal float _Hs, _Is, _heatS, _condS, _baseS, _frontAmt; internal bool _wxInit; bool _frontInit;
+        internal float _effCoverage = 0.5f, _effBottom = 1500, _effTop = 4500, _H, _I, _heat, _cond, _tod, _ci; internal int _front;
+        internal NOCSync Sync; internal NOCBoscali Boscali; internal NOCMountainFog Oro; internal float EvolveRate => _evolve.Value;
         readonly Dictionary<Camera, UniversalAdditionalCameraData> _camData = new Dictionary<Camera, UniversalAdditionalCameraData>();
         readonly Vector3[] _corners = new Vector3[4];
 
@@ -88,6 +93,8 @@ namespace NoAtmoFX
         // ---------- language: config is in English, the menu can also be shown in Portuguese ----------
         static readonly Dictionary<string, string> PtDesc = new Dictionary<string, string>
         {
+            { "Multiplayer/SyncClouds", "No multijogador as nuvens seguem o relógio da missão que o jogo compartilha, então todos os jogadores veem as mesmas nuvens (também em servidores sem mods). Desligado = comportamento antigo (cada um com a sua deriva)." },
+            { "Multiplayer/FollowHostSettings", "Quando o host também usa o NoAtmoFX: usar as configurações de nuvem do host (Weather, Layer, Shape, Scale, Variation, Wind, Storm, Nuclear) enquanto estiver no jogo dele, pra nuvem ficar idêntica. As suas voltam quando você sai. Luz, qualidade, vidro e atmosfera continuam as suas." },
             { "Nuclear/Enabled", "Explosões nucleares empurram as nuvens: abre um buraco atrás da onda de choque, a nuvem se acumula na borda e anéis de condensação se formam em volta do cogumelo." },
             { "Nuclear/HoleSize", "Tamanho do buraco que a explosão abre nas nuvens, em raios de explosão ((kg de TNT)^(1/3) m: 1 Mt = 1 km). 7 = 7 km para 1 Mt." },
             { "Nuclear/WilsonCloud", "Casca de condensação atrás da onda de choque nos primeiros segundos (mais forte em ar úmido). 0 = desliga." },
@@ -139,6 +146,7 @@ namespace NoAtmoFX
             { "Wind/WindVeer", "Quanto a direção do cisalhamento gira até 8 km de altura (rad)." },
             { "Wind/Evolution", "Velocidade com que as bolhas 'fervem'/mudam de forma (m/s). 0 = nuvens só deslizam." },
             { "Weather/ConditionsOverride", "Tempo: -1 = o da missão; 0 = céu de bom tempo ... 1 = tempestade." },
+            { "Shape/BaseRoughness", "Parte de baixo dos cúmulos: 0 = todas cortadas retas na base da camada; mais alto = cada nuvem um pouco acima (até ~180 m), fundo subindo para as bordas e mais macio." },
             { "Weather/ChangeTime", "Minutos que as nuvens levam para acompanhar uma mudança de tempo (condições, base, frente, ciclo do dia). Nuvem de verdade nunca muda de uma vez." },
             { "Weather/TimeOfDayOverride", "Hora usada pelo ciclo do dia: -1 = a da missão." },
             { "Weather/DiurnalCycle", "Ciclo do dia: o sol aquece o chão, os cúmulos crescem à tarde e somem à noite." },
@@ -186,10 +194,17 @@ namespace NoAtmoFX
             { "Quality/Steps", "Máximo de passos de raymarch." },
             { "Quality/LightSteps", "Passos em direção ao sol." },
             { "Quality/Downscale", "1 = resolução cheia, 2 = metade, 4 = um quarto." },
+            { "Quality/LightLOD", "Luz do sol mais barata dentro das nuvens onde não dá pra notar: além de ~18-28 km e no fundo da nuvem (onde passa menos de ~25% da vista). Metade das amostras de luz, mesmo comprimento total, sem detalhe fino ali. 0 = desligado (Ultra)." },
+            { "Quality/EmptySkip", "Pulo do ar vazio: um mapa pequeno com a distância de cada ponto até o lugar mais próximo onde pode haver nuvem deixa o raymarch saltar o ar limpo entre as nuvens. Mesmo visual (o mapa é conservador), menos passos. Desligado = o raymarch da 1.3." },
             { "Quality/MinStep", "Passo mínimo (m)." },
+            { "Quality/Preset", "Preset de qualidade: Low, Medium, High ou Ultra (Ultra = visual completo, todo pixel calculado todo quadro). Escolher um ajusta Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance e a resolução/passos da sombra; mexer em qualquer um desses à mão vira Custom." },
+            { "Quality/Temporal", "Reprojeção temporal: 0 = desligada (todo pixel de nuvem calculado todo quadro), 1 = metade dos pixels por quadro (xadrez), 2 = um quarto por quadro (2x2). O resto vem dos quadros anteriores, movido com a câmera e preso às cores dos pixels novos em volta. Raios, clarões nucleares e cortes de câmera sempre são desenhados inteiros." },
             { "Quality/StepGrowth", "Quanto o passo cresce com a distância." },
             { "Quality/MaxStep", "Passo máximo (m)." },
             { "Quality/MaxDistance", "Distância máxima desenhada (m)." },
+            { "Quality/MapSlicing", "Mapas de tempo ficam parados e são atualizados um por quadro (só recentram quando a câmera anda ~1 km); o reflexo do mar reaproveita os mesmos. Mesmo visual, menos GPU. Desligado = refaz todos a cada quadro, como na 1.1." },
+            { "Quality/ShadowUpdateEvery", "Os mapas de sombra das nuvens são redesenhados a cada N quadros (o cookie e o mapa de profundidade revezam). 1 = todo quadro, como na 1.1." },
+            { "Quality/PerformanceMeter", "Mostra quantos milissegundos cada parte do mod gasta (nesta aba). Custa quase nada, mas deixe desligado quando não estiver olhando." },
             { "Shadows/CloudOnCloudSteps", "Passos longos em direção ao sol (sombra de uma nuvem sobre outra, até ~7 km). 0 = desliga." },
             { "Shadows/CloudOnCloudStrength", "Força da sombra de nuvem sobre nuvem." },
             { "Shadows/Shadows", "Sombras das nuvens no chão e nos aviões (substitui o cookie do sol do jogo)." },
@@ -212,6 +227,10 @@ namespace NoAtmoFX
             { "Glass/TestMode", "Teste: 0 = normal, 1 = nuvem (gotas), 2 = nuvem congelada (geada), 3 = chuva." },
             { "Atmosphere/NearRain", "Chuva caindo perto da câmera: 0 = automático (desliga se o Nuclear Rain estiver instalado), 1 = sempre, 2 = nunca." },
             { "Atmosphere/RainShafts", "Cortinas de chuva debaixo dos cúmulos-nimbos e cúmulos grossos (visíveis de longe)." },
+            { "Atmosphere/Rainbow", "Arco-íris (principal + secundário) nas cortinas de chuva iluminadas. Raro de propósito: só com chuva de verdade, sol atrás de você e no ângulo certo. 0 = desliga." },
+            { "Atmosphere/Glory", "Glória (anéis coloridos em volta do ponto oposto ao sol) e arco branco no topo de nuvens iluminadas logo abaixo de você. Raro de propósito. 0 = desliga." },
+            { "Atmosphere/ValleyFog", "Névoa de vale nas montanhas: da noite até o meio da manhã, vento fraco, céu mais limpo e ar úmido. Enche os vales de verdade até um nível plano e some depois que o sol nasce. Rara de propósito. 0 = desliga." },
+            { "Atmosphere/MountainCloud", "Nuvem de encosta: com ar úmido e vento, a nuvem gruda nas encostas do lado do vento e nos picos que chegam perto da base das nuvens; some do lado de trás. Rara de propósito. 0 = desliga." },
             { "Atmosphere/RainDensity", "Quanto a chuva tira a visibilidade (cortinas)." },
             { "Atmosphere/Lightning", "Relâmpagos nos cúmulos-nimbos (0 = desliga; maior = mais frequentes/fortes)." },
             { "Atmosphere/Turbulence", "Turbulência dentro das nuvens (0 = desliga). Cúmulo-nimbo sacode bem mais." },
@@ -236,7 +255,8 @@ namespace NoAtmoFX
             { "Shadows", "Sombra" },
             { "Glass", "Vidro" },
             { "Atmosphere", "Atmosfera" },
-            { "Nuclear", "Nuclear" }
+            { "Nuclear", "Nuclear" },
+            { "Multiplayer", "Multijogador" }
         };
         bool Pt => _lang.Value == 2 || (_lang.Value == 0 && Application.systemLanguage == SystemLanguage.Portuguese);
         string T(string en, string pt) => Pt ? pt : en;
@@ -302,6 +322,7 @@ namespace NoAtmoFX
             _density = C.Bind("Shape", "Density", 0.05f, new ConfigDescription("Extinction per metre inside the cloud.", R(0.002f, 0.2f)));
             _dome = C.Bind("Shape", "Dome", 0.45f, new ConfigDescription("How much the cloud narrows with height (higher = rounder, lower domes; lower = towers).", R(0, 1.5f)));
             _billow = C.Bind("Shape", "Billow", 0.45f, new ConfigDescription("Cauliflower billows on the cloud surface.", R(0, 1.5f)));
+            _baseRough = C.Bind("Shape", "BaseRoughness", 0.5f, new ConfigDescription("Cumulus undersides: 0 = every cloud cut flat at the layer base; higher = each cloud a little higher (up to ~180 m), bottoms curving up toward the edges and softer.", R(0, 1)));
             _soft = C.Bind("Shape", "Softness", 0.14f, new ConfigDescription("Cloud edge (lower = sharper outline).", R(0.01f, 0.4f)));
             _erosion = C.Bind("Shape", "DetailErosion", 0.35f, new ConfigDescription("How much the fine noise eats from the edges (wisps at the base, cauliflower at the top).", R(0, 1)));
             _topDensity = C.Bind("Shape", "TopDensity", 1f, new ConfigDescription("Density at the top relative to the base.", R(0.3f, 4)));
@@ -369,13 +390,20 @@ namespace NoAtmoFX
             _sunWhite = C.Bind("Lighting", "SunWhiten", 0.3737624f, new ConfigDescription("How much to whiten the sun colour.", R(0, 1)));
             _fogAmt = C.Bind("Lighting", "GameFog", 1f, new ConfigDescription("How much the game's fog applies to the clouds.", R(0, 2)));
 
+            _preset = C.Bind("Quality", "Preset", "Custom", new ConfigDescription("Quality preset: Low, Medium, High or Ultra (Ultra = the full look, every pixel raymarched every frame). Choosing one sets Downscale, Temporal, Steps, LightSteps, MaxStep, MaxDistance and the shadow resolution/steps; changing any of those by hand turns this into Custom.", new AcceptableValueList<string>(PresetNames)));
             _steps = C.Bind("Quality", "Steps", 256, new ConfigDescription("Maximum raymarch steps.", Ri(16, 512)));
             _lightSteps = C.Bind("Quality", "LightSteps", 4, new ConfigDescription("Steps toward the sun.", Ri(1, 6)));
+            _lightLod = C.Bind("Quality", "LightLOD", 1, new ConfigDescription("Cheaper sunlight inside the clouds where it cannot be told apart: beyond ~18-28 km and deep inside a cloud (where less than ~25% of the view still gets through). Half the light samples, same total length, no fine detail there. 0 = off (Ultra).", Ri(0, 1)));
+            _emptySkip = C.Bind("Quality", "EmptySkip", true, "Empty-space skipping: a small map of how far each spot is from the nearest place a cloud could be lets the raymarch jump over clear air between clouds. Same look (the map is conservative), fewer steps. Off = the 1.3 march.");
             _downscale = C.Bind("Quality", "Downscale", 2, new ConfigDescription("1 = full resolution, 2 = half, 4 = quarter.", Ri(1, 4)));
+            _temporal = C.Bind("Quality", "Temporal", 0, new ConfigDescription("Temporal reprojection: 0 = off (every cloud pixel raymarched every frame), 1 = half of the pixels per frame (checkerboard), 2 = a quarter per frame (2x2). The rest comes from the previous frames, moved with the camera and kept within the colours of the fresh pixels around them. Lightning, nuclear flashes and camera cuts are always drawn in full.", Ri(0, 2)));
             _minStep = C.Bind("Quality", "MinStep", 15f, new ConfigDescription("Minimum step (m).", R(5, 200)));
             _stepGrowth = C.Bind("Quality", "StepGrowth", 0.006f, new ConfigDescription("How much the step grows with distance.", R(0.001f, 0.05f)));
             _maxStep = C.Bind("Quality", "MaxStep", 300f, new ConfigDescription("Maximum step (m).", R(50, 3000)));
             _maxDist = C.Bind("Quality", "MaxDistance", 80000f, new ConfigDescription("Maximum drawn distance (m).", R(10000, 400000)));
+            _mapSlicing = C.Bind("Quality", "MapSlicing", true, "Weather maps stay put and are refreshed one per frame (recentered only after the camera moves ~1 km); the reflection probe reuses them. Same look, less GPU. Off = rebuild all of them every frame, as in 1.1.");
+            _shEvery = C.Bind("Quality", "ShadowUpdateEvery", 2, new ConfigDescription("Cloud shadow maps are redrawn every N frames (the cookie and the opacity depth map take turns). 1 = every frame, as in 1.1.", Ri(1, 4)));
+            _perfMeter = C.Bind("Quality", "PerformanceMeter", false, "Shows how many milliseconds each part of the mod takes (in this tab). Costs almost nothing, but leave it off when not looking.");
             _farSteps = C.Bind("Shadows", "CloudOnCloudSteps", 4, new ConfigDescription("Long steps toward the sun (shadow of one cloud on another, up to ~7 km). 0 = off.", Ri(0, 6)));
             _farShadow = C.Bind("Shadows", "CloudOnCloudStrength", 0.6f, new ConfigDescription("Strength of cloud-on-cloud shadow.", R(0, 2)));
             _shOn = C.Bind("Shadows", "Shadows", true, "Cloud shadows on the ground and aircraft (replaces the game's sun cookie).");
@@ -383,6 +411,7 @@ namespace NoAtmoFX
             _shRes = C.Bind("Shadows", "ShadowResolution", 512, new ConfigDescription("Shadow map resolution.", Ri(128, 2048)));
             _shOpacity = C.Bind("Shadows", "ShadowOpacity", 0.85f, new ConfigDescription("How much the shadow darkens sunlight.", R(0, 1)));
             _shSteps = C.Bind("Shadows", "ShadowSteps", 16, new ConfigDescription("Steps through the cloud layer.", Ri(4, 48)));
+            InitPresets();
             _shProt = C.Bind("Shadows", "OwnAircraftRadius", 150f, new ConfigDescription("Radius (m) around the camera where clouds below it don't shadow (protects your aircraft). The rest of the ground gets shadow from all clouds.", R(0, 2000)));
             _shBelow = C.Bind("Shadows", "ShadowFromBelow", 0f, new ConfigDescription("1 = clouds below the camera shadow even your aircraft (normally 0).", R(0, 1)));
 
@@ -402,6 +431,8 @@ namespace NoAtmoFX
             _atNearRain = C.Bind("Atmosphere", "NearRain", 0, new ConfigDescription("Rain falling near the camera: 0 = automatic (off if Nuclear Rain is installed), 1 = always, 2 = never.", Ri(0, 2)));
             _atShafts = C.Bind("Atmosphere", "RainShafts", true, "Rain curtains under cumulonimbus (visible from afar).");
             _atRainVis = C.Bind("Atmosphere", "RainDensity", 1f, new ConfigDescription("How much rain reduces visibility (curtains).", R(0.2f, 3)));
+            _atRainbow = C.Bind("Atmosphere", "Rainbow", 1f, new ConfigDescription("Rainbow (primary + secondary bow) in sunlit rain curtains. Rare on purpose: only real rain, lit by a sun behind you, at the right angle. 0 = off.", R(0, 2)));
+            _atGlory = C.Bind("Atmosphere", "Glory", 1f, new ConfigDescription("Glory (coloured rings around the antisolar point) and white cloudbow on sunlit cloud tops close below you. Rare on purpose. 0 = off.", R(0, 2)));
             _atLightning = C.Bind("Atmosphere", "Lightning", 1f, new ConfigDescription("Lightning in cumulonimbus (0 = off; higher = more frequent/stronger).", R(0, 3)));
             _atTurb = C.Bind("Atmosphere", "Turbulence", 1f, new ConfigDescription("Turbulence inside clouds (0 = off). Cumulonimbus shake much more.", R(0, 3)));
             _atRays = C.Bind("Atmosphere", "GodRays", 0.35f, new ConfigDescription("Screen-space sun rays between clouds (0 = off).", R(0, 1.5f)));
@@ -417,8 +448,12 @@ namespace NoAtmoFX
             _spass = new ShadowPass(this);
             Atmos = new NOCAtmos(this); Atmos.Init(_ab); _apass = new AtmosPass(this);
             Nukes = new NOCNukes(this, C); Nukes.Patch();
+            Sync = new NOCSync(this, C);
+            Boscali = new NOCBoscali(C);
+            Oro = new NOCMountainFog(C);
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
-            Log.LogInfo("NoAtmoFX " + Version + " loaded.");
+            NoAtmoFXApi.P = this; _onPrev = _on.Value;
+            Log.LogInfo("NoAtmoFX " + Version + " loaded (integration API " + NoAtmoFXApi.ApiVersion + ").");
         }
 
         bool LoadBundle()
@@ -548,7 +583,7 @@ namespace NoAtmoFX
         internal float FogExtra;
         void OwnFog()
         {
-            if (!_on.Value || _atFog.Value <= 0.001f || _level == null) { _fogWritten = -1; FogExtra = 0; return; }
+            if (!_on.Value || _atFog.Value <= 0.001f || _level == null || (Boscali != null && Boscali.YieldFog)) { _fogWritten = -1; FogExtra = 0; return; }
             var cam = TargetCamera(); if (cam == null) return;
             // the game only rewrites the fog now and then: if the value is still ours, the stored base is valid
             if (Mathf.Abs(RenderSettings.fogDensity - _fogWritten) > 1e-9f)
@@ -602,7 +637,7 @@ namespace NoAtmoFX
             RenderPipelineManager.beginCameraRendering -= OnBeginCamera;
             SetGameCloudsHidden(false);
             Wet?.Release(); if (ProbeRT != null) ProbeRT.Release(); Atmos?.Release();
-            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT }) if (r != null) r.Release();
+            foreach (var r in new[] { CloudRT, ReflCloudRT, WxA, WxB, WxC, WxP, ShadowRT, ShadowDRT, TFresh, THist0, THist1, FootA, FootB, FootD }) if (r != null) r.Release();
         }
 
         // ---------- rain: our own, or matched to the Nuclear Rain mod ----------
@@ -689,7 +724,7 @@ namespace NoAtmoFX
         }
 
         // ---------- atmosphere ----------
-        bool NearRainOn() => _atNearRain.Value == 1 || (_atNearRain.Value == 0 && NuclearRain() == null);
+        bool NearRainOn() => _atNearRain.Value == 1 || (_atNearRain.Value == 0 && NuclearRain() == null && !(Boscali != null && Boscali.YieldNearRain));
         internal void DrawNearRain(CommandBuffer cmd, Camera cam)
         {
             if (Atmos == null || !NearRainOn() || _level == null) return;
@@ -715,13 +750,17 @@ namespace NoAtmoFX
         // ---------- per frame ----------
         void Update()
         {
+            Perf.SetEnabled(_perfMeter.Value);
+            Perf.Tick();
+            BenchTick();
             if (_toggleKey.Value.IsDown()) { _on.Value = !_on.Value; Log.LogInfo("Clouds " + (_on.Value ? "ON" : "OFF")); }
+            if (_on.Value != _onPrev) { _onPrev = _on.Value; NoAtmoFXApi.RaiseEnabled(_onPrev); }
             if (_dumpKey.Value.IsDown()) Dump();
             if (_menuKey.Value.IsDown())
             {
                 _menu = !_menu;
                 if (_menu) { _prevLock = Cursor.lockState; _prevVis = Cursor.visible; Cursor.lockState = CursorLockMode.None; Cursor.visible = true; }
-                else { Cursor.lockState = _prevLock; Cursor.visible = _prevVis; Config.Save(); }
+                else { Cursor.lockState = _prevLock; Cursor.visible = _prevVis; SaveConfig(); }
             }
             if (_menu) { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; }
 
@@ -729,10 +768,12 @@ namespace NoAtmoFX
             if (lvl != _level)
             {
                 SetWaterOwned(false); Water.Clear();
-                _level = lvl; _wxInit = false; _windDirSet = false; _frontInit = false; _cloudLayer = null; _weatherSet = null; _hidden.Clear(); _camData.Clear();
+                _level = lvl; _wxInit = false; _covInit = false; _windDirSet = false; _frontInit = false; _cloudLayer = null; _weatherSet = null; _hidden.Clear(); _camData.Clear();
                 if (_level != null && F_cloudLayer != null) _cloudLayer = F_cloudLayer.GetValue(_level) as Component;
                 if (_cloudLayer != null && F_ws == null) F_ws = _cloudLayer.GetType().GetField("currentWeatherSet", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
             }
+            Boscali?.Tick();
+            Sync?.Tick(Time.deltaTime, _level != null);
             if (_level == null) return;
 
             SetGameCloudsHidden(_on.Value && _hideGame.Value);
@@ -740,7 +781,13 @@ namespace NoAtmoFX
 
             // weather
             float dt = Time.deltaTime;
-            _evolveT += _evolve.Value * dt;
+            // multiplayer: drift and evolution run on the mission clock shared by the game, so every player
+            // (also one who joins late) has the same clouds; the F11 menu does not snap the weather there
+            bool mp = Sync != null && Sync.Shared;
+            float dts = mp ? (float)Sync.DT : dt;
+            bool snapMenu = _menu && !mp;
+            bool reanchor = mp && (!_wxInit || Sync.Jumped);   // start of the mission clock: drift as if this wind blew since then
+            if (reanchor) _evolveT = _evolve.Value * Sync.T; else _evolveT += _evolve.Value * dts;
             if (Wet != null)
             {
                 Wet.DropSize = _wgSize.Value; Wet.Airflow = _wgAir.Value;
@@ -753,7 +800,7 @@ namespace NoAtmoFX
                 float rainGlass = nrp != null ? RainNow(out _) : rainHere;
                 if (Wet != null) { Wet.GameRain = rainGlass; Wet.RainNeedsCloud = false; }
                 bool wl = _weatherSet is WeatherSet wsl && wsl != null && wsl.lightning;
-                Atmos?.Step(dt, TargetCamera(), _level, Mathf.Max(_cbTop.Value, 9300f), _on.Value ? _atLightning.Value : 0f, wl, rainHere);
+                Atmos?.Step(dt, TargetCamera(), _level, Mathf.Max(_cbTop.Value, 9300f), _on.Value ? _atLightning.Value * (float.IsNaN(NoAtmoFXApi.Effective.Lightning) ? 1f : NoAtmoFXApi.Effective.Lightning) : 0f, wl, rainHere);
             }
             Wet?.Step(dt, _wgOn.Value, _wgInt.Value, _wgFreeze.Value, _wgRainTau.Value, _wgTest.Value, _wgFrostReach.Value, _wgFrostWhite.Value, _wgRefract.Value, _level.sun);
             float gameCov = -1;
@@ -762,52 +809,60 @@ namespace NoAtmoFX
                 _weatherSet = F_ws.GetValue(_cloudLayer);
                 if (_weatherSet is WeatherSet ws && ws != null) gameCov = ws.coverage;
             }
-            if (_gameWeather.Value)
+            var ext = NoAtmoFXApi.Effective;   // weather from other mods (or the host's, in multiplayer)
+            _extSrc = ext.Any;
+            if (_gameWeather.Value || ext.Any)
             {
-                _effBottom = _level.cloudHeight + _baseOffset.Value;
+                _effBottom = !float.IsNaN(ext.Base) ? ext.Base + _baseOffset.Value : _gameWeather.Value ? _level.cloudHeight + _baseOffset.Value : _manualBase.Value;
                 // the game's wind gusts and can reach huge values in storms: clouds follow a smooth
                 // average (~20 s) with a speed cap, and a stalled frame does not turn into a jump
-                Vector3 wv = _level.windVelocity * _windMul.Value; wv.y = 0;
+                Vector3 wv = ext.HasWind ? new Vector3(ext.WindX, 0, ext.WindZ) : _level.windVelocity * _windMul.Value; wv.y = 0;
+                if (!ext.HasWind && !_gameWeather.Value) wv = new Vector3(0.94f, 0, 0.34f) * _windSpeed.Value;
                 if (wv.magnitude > _maxCloudSpeed.Value) wv = wv.normalized * _maxCloudSpeed.Value;
                 float kw = 1f - Mathf.Exp(-dt / 120f);   // drift changes heading/speed over ~2 min
-                if (!_wxInit || _menu) _windS = wv; else _windS += (wv - _windS) * kw;
-                float dtw = Mathf.Min(dt, 0.1f);
-                _windX += _windS.x * dtw;
-                _windZ += _windS.z * dtw;
-                if (Time.time - _windLogT > 30f && _level.windVelocity.magnitude * _windMul.Value > _maxCloudSpeed.Value)
+                if (mp) kw = 1f - Mathf.Exp(-dts / 120f);
+                if (!_wxInit || snapMenu) _windS = wv; else _windS += (wv - _windS) * kw;
+                if (reanchor) { _windX = _windS.x * Sync.T; _windZ = _windS.z * Sync.T; }   // as if this wind blew since the start
+                else
+                {
+                    float dtw = mp ? dts : Mathf.Min(dt, 0.1f);
+                    _windX += _windS.x * dtw;
+                    _windZ += _windS.z * dtw;
+                }
+                if (!ext.HasWind && _gameWeather.Value && Time.time - _windLogT > 30f && _level.windVelocity.magnitude * _windMul.Value > _maxCloudSpeed.Value)
                 { _windLogT = Time.time; Log.LogInfo($"Wind: game {_level.windVelocity.magnitude:F1} m/s, clouds capped at {_maxCloudSpeed.Value:F0} m/s."); }
             }
             else
             {
                 _effBottom = _manualBase.Value;
-                _windX += 0.94 * _windSpeed.Value * dt;
-                _windZ += 0.34 * _windSpeed.Value * dt;
+                if (reanchor) { _windX = 0.94 * _windSpeed.Value * Sync.T; _windZ = 0.34 * _windSpeed.Value * Sync.T; }
+                else { _windX += 0.94 * _windSpeed.Value * dts; _windZ += 0.34 * _windSpeed.Value * dts; }
             }
             _effBottom = Mathf.Max(0, _effBottom);
             Nukes?.Step(dt, _level, TargetCamera(), _windX, _windZ);
             // game base and conditions also change slowly (the game can switch all at once)
             // change time: everything that changes the cloud field follows the weather slowly
             float Tc = Mathf.Max(12f, _changeMin.Value * 12f);   // two smoothing stages in series: ~95% at ChangeTime
-            float condRaw = _condOv.Value >= 0 ? _condOv.Value : _level.conditions;
-            if (!_wxInit || _menu) { _condS = condRaw; _baseS = _effBottom; }
-            else { float k0 = 1f - Mathf.Exp(-dt / Tc); _condS += (condRaw - _condS) * k0; _baseS += (_effBottom - _baseS) * k0; }
+            float condRaw = _condOv.Value >= 0 ? _condOv.Value : !float.IsNaN(ext.Conditions) ? ext.Conditions : _level.conditions;
+            if (!_wxInit || snapMenu) { _condS = condRaw; _baseS = _effBottom; }
+            else { float k0 = 1f - Mathf.Exp(-dts / Tc); _condS += (condRaw - _condS) * k0; _baseS += (_effBottom - _baseS) * k0; }
             _effBottom = _baseS;
 
             // ---- weather model: mission weather + time of day -> humidity (H) and instability (I) ----
             _cond = _condS;
-            _tod = _todOv.Value >= 0 ? _todOv.Value : _level.timeOfDay;
+            _tod = _todOv.Value >= 0 ? _todOv.Value : !float.IsNaN(ext.Tod) ? ext.Tod : _level.timeOfDay;
             float heatRaw = _diurnal.Value ? Mathf.Clamp01(Mathf.Sin(Mathf.PI * (_tod - 8f) / 12f)) * (_tod > 8 && _tod < 20 ? 1 : 0) : 0.7f;
-            _H = 0.35f + 0.6f * _cond + _humBias.Value;
-            if (gameCov >= 0 && _condOv.Value < 0) _H += (gameCov - 0.5f) * 0.1f;   // the game's weather set pulls it a little
+            _H = 0.35f + 0.6f * _cond + _humBias.Value + (float.IsNaN(ext.Hum) ? 0 : ext.Hum);
+            if (gameCov >= 0 && _condOv.Value < 0 && float.IsNaN(ext.Conditions)) _H += (gameCov - 0.5f) * 0.1f;   // the game's weather set pulls it a little
             // weather changes slowly (game weather set, front, time of day): ChangeTime
-            if (_wxInit && !_menu) _heat = _heatS += (heatRaw - _heatS) * (1f - Mathf.Exp(-dt / Tc)); else _heat = _heatS = heatRaw;
-            _I = (0.15f + 0.75f * _cond) * (0.3f + 0.7f * _heat) + _insBias.Value;
-            if (_wxInit) { float k = 1f - Mathf.Exp(-dt / Tc); _Hs += (_H - _Hs) * k; _Is += (_I - _Is) * k; }
+            if (_wxInit && !snapMenu) _heat = _heatS += (heatRaw - _heatS) * (1f - Mathf.Exp(-dts / Tc)); else _heat = _heatS = heatRaw;
+            _I = (0.15f + 0.75f * _cond) * (0.3f + 0.7f * _heat) + _insBias.Value + (float.IsNaN(ext.Ins) ? 0 : ext.Ins);
+            if (_wxInit) { float k = 1f - Mathf.Exp(-dts / Tc); _Hs += (_H - _Hs) * k; _Is += (_I - _Is) * k; }
             else { _Hs = _H; _Is = _I; _wxInit = true; }
-            if (_menu) { _Hs = _H; _Is = _I; }   // in the menu, tuning applies immediately
+            if (snapMenu) { _Hs = _H; _Is = _I; }   // in the menu, tuning applies immediately
             _H = _Hs; _I = _Is;
             _ci = Mathf.Lerp(0.15f, 0.6f, _cond) * _cirrusAmt.Value;
-            int fm = _frontMode.Value;
+            int fm = ext.Front >= 0 ? ext.Front : _frontMode.Value;
             // automatic front with hysteresis; a type change fades out and in slowly
             int ft = fm;
             if (fm == 3)
@@ -815,12 +870,85 @@ namespace NoAtmoFX
                 ft = _front;
                 if (_cond >= 0.63f) ft = 1; else if (_cond >= 0.43f && _cond <= 0.57f) ft = 2; else if (_cond <= 0.37f) ft = 0;
             }
-            if (_menu || !_frontInit) { _front = ft; _frontAmt = ft == 0 ? 0 : 1; _frontInit = true; }
-            else if (ft != _front) { _frontAmt -= dt / (Tc * 1.5f); if (_frontAmt <= 0) { _frontAmt = 0; _front = ft; } }
-            else if (_front != 0) _frontAmt = Mathf.Min(1, _frontAmt + dt / (Tc * 3f));
+            if (snapMenu || !_frontInit) { _front = ft; _frontAmt = ft == 0 ? 0 : 1; _frontInit = true; }
+            else if (ft != _front) { _frontAmt -= dts / (Tc * 1.5f); if (_frontAmt <= 0) { _frontAmt = 0; _front = ft; } }
+            else if (_front != 0) _frontAmt = Mathf.Min(1, _frontAmt + dts / (Tc * 3f));
             _effCoverage = Mathf.Clamp01((_H - 0.3f) / 0.5f) * 0.85f * _coverage.Value;
+            // coverage scale from other mods: smoothed like the rest of the weather
+            float covT = float.IsNaN(ext.Cov) ? 1f : ext.Cov;
+            if (snapMenu || !_covInit) { _covS = covT; _covInit = true; } else _covS += (covT - _covS) * (1f - Mathf.Exp(-dts / Tc));
+            _effCoverage = Mathf.Clamp01(_effCoverage * _covS);
             _effTop = _effBottom + 250 + Mathf.Pow(Mathf.Clamp01(_I), 1.6f) * 4500;
         }
+
+        // ---------------- integration API helpers ----------------
+        bool _onPrev, _extSrc, _covInit; float _covS = 1f;
+        readonly Dictionary<ConfigEntryBase, float> _lastOn = new Dictionary<ConfigEntryBase, float>();
+
+        internal void SetEntry<T>(ConfigEntry<T> e, T v, bool persist)
+        {
+            if (persist) { e.Value = v; return; }
+            bool s = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            try { e.Value = v; } finally { Config.SaveOnConfigSet = s; }
+        }
+
+        ConfigEntryBase FeatureEntry(string n)
+        {
+            switch (n.ToLowerInvariant())
+            {
+                case "clouds": return _on;
+                case "shadows": return _shOn;
+                case "rainshafts": return _atShafts;
+                case "nearrain": return _atNearRain;
+                case "lightning": return _atLightning;
+                case "turbulence": return _atTurb;
+                case "godrays": return _atRays;
+                case "lightshafts": return _atShafts2;
+                case "fog": return _atFog;
+                case "wetglass": return _wgOn;
+                case "nuclearclouds": return Nukes?.On;
+                case "keepsun": return _keepSun;
+                case "rainbow": return _atRainbow;
+                case "glory": return _atGlory;
+                case "valleyfog": return Oro?.ValleyEntry;
+                case "mountaincloud": return Oro?.CapEntry;
+            }
+            return null;
+        }
+
+        internal bool SetFeature(string name, bool on, bool persist)
+        {
+            var e = FeatureEntry(name);
+            if (e == null) return false;
+            if (e is ConfigEntry<bool> b) SetEntry(b, on, persist);
+            else if (e is ConfigEntry<int> i) SetEntry(i, on ? 0 : 2, persist);   // NearRain: 0 auto, 2 never
+            else if (e is ConfigEntry<float> f)
+            {
+                if (!on) { if (f.Value > 0.001f) _lastOn[f] = f.Value; SetEntry(f, 0f, persist); }
+                else if (f.Value <= 0.001f) SetEntry(f, _lastOn.TryGetValue(f, out var v) ? v : (float)f.DefaultValue, persist);
+            }
+            return true;
+        }
+
+        internal bool GetFeature(string name)
+        {
+            var e = FeatureEntry(name);
+            if (e is ConfigEntry<bool> b) return b.Value;
+            if (e is ConfigEntry<int> i) return i.Value != 2;
+            if (e is ConfigEntry<float> f) return f.Value > 0.001f;
+            return false;
+        }
+
+        internal string WeatherSourceName()
+        {
+            if (_condOv.Value >= 0) return "menu";
+            if (Sync != null && Sync.HostLive && Sync.HostInputValid && Sync.HostInput.Any) return "host";
+            if (NoAtmoFXApi.In.Any) return "api";
+            if (NoAtmoFXApi.Adapter.Any) return "boscali";
+            return "mission";
+        }
+
+        void SaveConfig() { if (Sync != null) Sync.BeforeSave(Config.Save); else Config.Save(); }
 
         void SetGameCloudsHidden(bool hide)
         {
@@ -856,58 +984,194 @@ namespace NoAtmoFX
             return rt;
         }
 
-        // weather maps: once per frame, by the first pass that needs them
-        internal void EnsureWeather(CommandBuffer cmd, Material mat)
+        static RenderTexture MakePointRT(RenderTexture rt, RenderTextureFormat f, string n)
         {
-            if (WxFrame == Time.frameCount && WxA != null) return;
+            rt = MakeRT(rt, 512, 512, f, n);
+            rt.filterMode = FilterMode.Point;
+            return rt;
+        }
+
+        // weather maps: once per frame, by the first pass that needs them
+        Vector2 _mapC; float _mapWtx; bool _mapValid, _mapFull, _reflOwnMaps; int _mapRR;
+        internal void EnsureWeather(CommandBuffer cmd, Material mat, bool refl = false)
+        {
+            if (refl && !_reflOwnMaps && _mapValid && WxA != null) return;    // the probe reuses the camera's maps
+            if (!refl && WxFrame == Time.frameCount && WxA != null) return;
+            bool fresh = WxA == null || WxA.width != 1024;
             WxA = MakeRT(WxA, 1024, 1024, RenderTextureFormat.ARGBHalf, "NOC_WxA");
             WxB = MakeRT(WxB, 1024, 1024, RenderTextureFormat.ARGBHalf, "NOC_WxB");
             WxC = MakeRT(WxC, 1024, 1024, RenderTextureFormat.ARGBHalf, "NOC_WxC");
             WxP = MakeRT(WxP, 512, 512, RenderTextureFormat.RGHalf, "NOC_WxP");
-            cmd.Blit((Texture)null, WxA, mat, 2);
-            cmd.Blit((Texture)null, WxP, mat, 3);
-            cmd.Blit((Texture)null, WxB, mat, 4);
-            cmd.Blit((Texture)null, WxC, mat, 5);
-            cmd.SetGlobalTexture("_WxA", WxA); cmd.SetGlobalTexture("_WxB", WxB); cmd.SetGlobalTexture("_WxC", WxC); cmd.SetGlobalTexture("_WarpTex", WxP);
+            bool all = refl || fresh || _mapFull || !_mapSlicing.Value;
+            // the weather itself changes over minutes (Weather > ChangeTime), so between recenterings one map per
+            // frame is plenty; all four at once whenever the center moves (they must share it)
+            int k = _mapRR++ & 3;
+            using (new ProfilingScope(cmd, refl ? null : Perf.Weather))
+            {
+                if (all || k == 0) cmd.Blit((Texture)null, WxA, mat, 2);
+                if (all || k == 1) cmd.Blit((Texture)null, WxP, mat, 3);
+                if (all || k == 2) cmd.Blit((Texture)null, WxB, mat, 4);
+                if (all || k == 3) cmd.Blit((Texture)null, WxC, mat, 5);
+            }
+            cmd.SetGlobalTexture(ID._WxA, WxA); cmd.SetGlobalTexture(ID._WxB, WxB); cmd.SetGlobalTexture(ID._WxC, WxC); cmd.SetGlobalTexture(ID._WarpTex, WxP);
+            // footprint distance map (empty-space skipping): redone once all four maps have had their turn
+            // (the weather changes over minutes; the map keeps a safety margin), or whenever they all were redone
+            if (_emptySkip.Value && mat.passCount > 20 && (all || k == 3 || FootD == null || !FootD.IsCreated()))   // older bundles have no footprint passes
+            {
+                using (new ProfilingScope(cmd, refl ? null : Perf.Weather))
+                {
+                    FootA = MakePointRT(FootA, RenderTextureFormat.RGFloat, "NOC_FootA");
+                    FootB = MakePointRT(FootB, RenderTextureFormat.RGFloat, "NOC_FootB");
+                    FootD = MakePointRT(FootD, RenderTextureFormat.RFloat, "NOC_FootD");
+                    cmd.Blit((Texture)null, FootA, mat, 18);
+                    // jump flood 256..1 texels, plus one more pass of 1 (fixes most of the rare misses)
+                    for (int st = 256; st >= 0; st = st > 1 ? st / 2 : st - 1)
+                    {
+                        cmd.SetGlobalFloat(ID._JfaStep, Mathf.Max(st, 1) / 512f);
+                        cmd.Blit(FootA, FootB, mat, 19);
+                        var sw = FootA; FootA = FootB; FootB = sw;
+                    }
+                    cmd.Blit(FootA, FootD, mat, 20);
+                }
+                cmd.SetGlobalTexture(ID._NOCFoot, FootD);
+            }
+            if (refl) { _mapValid = false; return; }   // maps now centered on the probe: the camera rebuilds its own next
+            _mapFull = false;
             WxFrame = Time.frameCount;
         }
 
         static readonly Matrix4x4 s_DirLightProj = Matrix4x4.Ortho(-0.5f, 0.5f, -0.5f, 0.5f, -0.5f, 0.5f);
 
         // shadow: map on the plane perpendicular to the sun, centered on the camera (snapped to the grid so it does not shimmer)
-        internal bool PrepareShadow(Camera cam, Material m, out Matrix4x4 worldToCookie, out int res)
+        // one shadow map frame: plane perpendicular to the sun around a snapped center, kept in GLOBAL coordinates
+        // so a map drawn on an earlier frame still lines up after the camera (or the floating origin) moved
+        internal struct ShFrame { public bool ok; public Vector3 centerG; public Quaternion q; public float S; public int res; }
+        internal ShFrame ShCookie, ShDepth;
+        internal bool PrepareShadow(Camera cam, Material m, out ShFrame f)
         {
-            worldToCookie = Matrix4x4.identity; res = Mathf.Clamp(_shRes.Value, 128, 2048);
+            f = default; f.res = Mathf.Clamp(_shRes.Value, 128, 2048);
             Light sun = _level != null ? _level.sun : null;
             if (sun == null || !sun.isActiveAndEnabled || sun.intensity <= 0 || sun.transform.forward.y > -0.02f) return false;
             Quaternion q = sun.transform.rotation;
             Vector3 right = q * Vector3.right, up = q * Vector3.up;
-            float S = _shDist.Value * 2f, texel = S / res;
+            float S = _shDist.Value * 2f, texel = S / f.res;
             Vector3 cp = cam.transform.position;
             float lx = Vector3.Dot(cp, right), ly = Vector3.Dot(cp, up);
             float sx = Mathf.Round(lx / texel) * texel, sy = Mathf.Round(ly / texel) * texel;
             Vector3 center = cp + right * (sx - lx) + up * (sy - ly);   // snapped center (Unity world)
-            Vector3 c0 = center - right * (S * 0.5f) - up * (S * 0.5f);
-            m.SetVector("_ShO", c0 - cp);          // camera-relative, like the rest of the shader
-            m.SetVector("_ShR", right * S);
-            m.SetVector("_ShU", up * S);
-            m.SetFloat("_ShSteps", Mathf.Clamp(_shSteps.Value, 4, 48));
-            m.SetFloat("_ShOpacity", _shOpacity.Value);
-            m.SetFloat("_ShBelow", _shBelow.Value);
-            m.SetFloat("_ShProt", _shProt.Value);
-            Matrix4x4 ls = Matrix4x4.TRS(center, q, Vector3.one);
-            worldToCookie = s_DirLightProj * Matrix4x4.Scale(new Vector3(1f / S, 1f / S, 1f)) * ls.inverse;
+            f.ok = true; f.centerG = center - Datum.originPosition; f.q = q; f.S = S;
+            m.SetFloat(ID._ShSteps, Mathf.Clamp(_shSteps.Value, 4, 48));
+            m.SetFloat(ID._ShOpacity, _shOpacity.Value);
+            m.SetFloat(ID._ShBelow, _shBelow.Value);
+            m.SetFloat(ID._ShProt, _shProt.Value);
             return true;
         }
+        // plane uniforms for frame f, relative to the camera now (globals through the command buffer, so each blit
+        // sees the values of its own frame)
+        internal static void ApplyShFrame(CommandBuffer cmd, Camera cam, ShFrame f)
+        {
+            Vector3 right = f.q * Vector3.right, up = f.q * Vector3.up;
+            Vector3 center = f.centerG + Datum.originPosition;
+            Vector3 c0 = center - right * (f.S * 0.5f) - up * (f.S * 0.5f);
+            cmd.SetGlobalVector(ID._ShO, c0 - cam.transform.position);   // camera-relative, like the rest of the shader
+            cmd.SetGlobalVector(ID._ShR, right * f.S);
+            cmd.SetGlobalVector(ID._ShU, up * f.S);
+        }
+        internal static Matrix4x4 CookieMatrix(ShFrame f)
+        {
+            Matrix4x4 ls = Matrix4x4.TRS(f.centerG + Datum.originPosition, f.q, Vector3.one);
+            return s_DirLightProj * Matrix4x4.Scale(new Vector3(1f / f.S, 1f / f.S, 1f)) * ls.inverse;
+        }
+        internal int ShEvery => Mathf.Clamp(_shEvery.Value, 1, 4);
 
         Vector2 WindDirL()
         {
             if (_windDirSet) return _windDirL;
-            Vector2 wd = _level != null ? new Vector2(_level.windVelocity.x, _level.windVelocity.z) : Vector2.zero;
-            if (!_gameWeather.Value || wd.sqrMagnitude < 0.01f) wd = new Vector2(0.94f, 0.34f);
+            var ext = NoAtmoFXApi.Effective;
+            Vector2 wd = ext.HasWind ? new Vector2(ext.WindX, ext.WindZ) : _level != null && _gameWeather.Value ? new Vector2(_level.windVelocity.x, _level.windVelocity.z) : Vector2.zero;
+            if (wd.sqrMagnitude < 0.01f) wd = new Vector2(0.94f, 0.34f);
             _windDirL = wd.normalized; _windDirSet = _level != null;
             return _windDirL;
         }
+
+        // ---------- quality presets ----------
+        // A preset only writes the entries below. Changing one of them by hand (F11, ConfigurationManager, another
+        // mod's panel) makes the preset read Custom again; the player's own values are never overwritten unless a
+        // named preset is chosen. On load, Custom is replaced by the name of the preset the values match.
+        internal static readonly string[] PresetNames = { "Custom", "Low", "Medium", "High", "Ultra" };
+        //                                    Downscale Temporal Steps LightSteps MaxStep MaxDistance ShadowRes ShadowSteps LightLOD
+        static readonly float[][] PresetVals =
+        {
+            new float[] { 3, 2, 128, 2, 500, 60000, 256, 8, 1 },     // Low
+            new float[] { 2, 2, 192, 3, 300, 80000, 384, 12, 1 },    // Medium
+            new float[] { 2, 2, 256, 4, 300, 80000, 512, 16, 1 },    // High: Ultra's look, a quarter of the rays per frame
+            new float[] { 2, 0, 256, 4, 300, 80000, 512, 16, 0 },    // Ultra: everything every frame (the look up to 1.3)
+        };
+        ConfigEntryBase[] _pEntries;
+        bool _pApplying;
+
+        void InitPresets()
+        {
+            _pEntries = new ConfigEntryBase[] { _downscale, _temporal, _steps, _lightSteps, _maxStep, _maxDist, _shRes, _shSteps, _lightLod };
+            Config.SettingChanged += (s, a) =>
+            {
+                if (_pApplying) return;
+                var e = a.ChangedSetting;
+                if (e == _preset) { if (_preset.Value == "Custom") SyncPresetName(); else ApplyPreset(_preset.Value, Config.SaveOnConfigSet); }
+                else if (System.Array.IndexOf(_pEntries, e) >= 0) SyncPresetName();
+            };
+            if (_preset.Value == "Custom" || System.Array.IndexOf(PresetNames, _preset.Value) < 0) SyncPresetName();
+            else if (MatchPreset() != _preset.Value) ApplyPreset(_preset.Value, true);   // chosen in the file (by hand or by another mod's menu)
+        }
+
+        string MatchPreset()
+        {
+            for (int i = 0; i < PresetVals.Length; i++)
+            {
+                bool ok = true;
+                for (int k = 0; k < _pEntries.Length && ok; k++) ok = Mathf.Abs(System.Convert.ToSingle(_pEntries[k].BoxedValue) - PresetVals[i][k]) < 0.01f;
+                if (ok) return PresetNames[i + 1];
+            }
+            return "Custom";
+        }
+
+        void SyncPresetName()
+        {
+            string n = MatchPreset();
+            if (n == _preset.Value) return;
+            _pApplying = true;
+            try { SetEntry(_preset, n, Config.SaveOnConfigSet); } finally { _pApplying = false; }
+            NoAtmoFXApi.RaisePreset(n);
+        }
+
+        internal bool ApplyPreset(string name, bool persist)
+        {
+            int i = System.Array.FindIndex(PresetNames, n => string.Equals(n, name, System.StringComparison.OrdinalIgnoreCase)) - 1;
+            if (i < 0) return false;
+            _pApplying = true;
+            bool save = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            try
+            {
+                var v = PresetVals[i];
+                for (int k = 0; k < _pEntries.Length; k++)
+                {
+                    var e = _pEntries[k];
+                    if (e is ConfigEntry<int> ei) ei.Value = Mathf.RoundToInt(v[k]); else if (e is ConfigEntry<float> ef) ef.Value = v[k];
+                }
+                _preset.Value = PresetNames[i + 1];
+            }
+            finally { Config.SaveOnConfigSet = save; _pApplying = false; }
+            if (persist) Config.Save();
+            NoAtmoFXApi.RaisePreset(_preset.Value);
+            return true;
+        }
+
+        // ---------- temporal reprojection state (main camera) ----------
+        internal RenderTexture TFresh, THist0, THist1;
+        internal int THistIdx, TLastFrame = -10, TPhase; internal bool THistOk; internal Camera TCam;
+        internal Vector3 TNowBL, TNowRx, TNowUy, TNowF, TNowPos, TPrevBL, TPrevRx, TPrevUy, TPrevF, TPrevPos;
+        internal float TFlashPrev, TNukePrev;
+        internal int TemporalMode => Mathf.Clamp(_temporal.Value, 0, 2);
 
         // ---------- uniforms (called by the pass) ----------
         internal Material Prepare(Camera cam, bool hdr, out int downscale)
@@ -917,96 +1181,126 @@ namespace NoAtmoFX
             var m = _mat;
             Transform tr = cam.transform;
             cam.CalculateFrustumCorners(new Rect(0, 0, 1, 1), 1f, Camera.MonoOrStereoscopicEye.Mono, _corners);
-            m.SetVector("_CornerBL", tr.TransformVector(_corners[0]));
-            m.SetVector("_CornerTL", tr.TransformVector(_corners[1]));
-            m.SetVector("_CornerTR", tr.TransformVector(_corners[2]));
-            m.SetVector("_CornerBR", tr.TransformVector(_corners[3]));
-            m.SetVector("_CamFwd", tr.forward);
+            m.SetVector(ID._CornerBL, tr.TransformVector(_corners[0]));
+            m.SetVector(ID._CornerTL, tr.TransformVector(_corners[1]));
+            m.SetVector(ID._CornerTR, tr.TransformVector(_corners[2]));
+            m.SetVector(ID._CornerBR, tr.TransformVector(_corners[3]));
+            m.SetVector(ID._CamFwd, tr.forward);
+            TNowBL = tr.TransformVector(_corners[0]); TNowRx = tr.TransformVector(_corners[3]) - TNowBL; TNowUy = tr.TransformVector(_corners[1]) - TNowBL; TNowF = tr.forward;
 
             Vector3 g = tr.position - Datum.originPosition; // global position (y above sea level)
             float Rp = _planetR.Value;
-            m.SetVector("_PlanetC", new Vector3(0, -(g.y + Rp), 0));
-            m.SetFloat("_R", Rp);
+            m.SetVector(ID._PlanetC, new Vector3(0, -(g.y + Rp), 0));
+            m.SetFloat(ID._R, Rp);
             
             float perC = _perC.Value, perCell = _perCell.Value, perS = _perS.Value, perD = _perD.Value;
             double ev = _evolveT;
             // +5e5: the Mod seam sits 500 km away (it used to be at the map center and the whole field jumped when crossing it)
             var G2 = new Vector2((float)Mod(g.x - _windX + 5e5, 1e6), (float)Mod(g.z - _windZ + 5e5, 1e6));
-            m.SetVector("_G", G2);
+            m.SetVector(ID._G, G2);
+            TNowPos = new Vector3(G2.x, g.y, G2.y);
             float wtx = 2f * _maxDist.Value / 512f;   // coarsest map texel (distortion)
-            GDLast = new Vector2(G2.x - Mathf.Round(G2.x / wtx) * wtx, G2.y - Mathf.Round(G2.y / wtx) * wtx);
-            m.SetVector("_GD", GDLast);
+            // the weather maps stay put in cloud space (their center snapped to the texel grid) and are only
+            // recentered after the camera has moved a few texels: the content at a given place is the same either
+            // way, so recentering is seamless; in between they are refreshed one map per frame (MapSlicing)
+            bool reflCam = cam.cameraType == CameraType.Reflection;
+            Vector2 snap = new Vector2(Mathf.Round(G2.x / wtx) * wtx, Mathf.Round(G2.y / wtx) * wtx);
+            if (!reflCam)
+            {
+                float lim = _mapSlicing.Value ? 4f * wtx : 0f;
+                Vector2 d = G2 - _mapC;
+                if (!_mapValid || wtx != _mapWtx || Mathf.Abs(d.x) > lim || Mathf.Abs(d.y) > lim)
+                {
+                    _mapC = snap; _mapWtx = wtx; _mapFull = true; _mapValid = true;
+                }
+                _reflOwnMaps = false;
+                GDLast = G2 - _mapC;
+            }
+            else
+            {
+                // reflection probe: reuse the camera's maps when the probe sits inside them (it used to rebuild all
+                // of them for each of the 6 faces and again for the camera afterwards: a spike every 5 s)
+                Vector2 d = G2 - _mapC;
+                _reflOwnMaps = !_mapSlicing.Value || !_mapValid || wtx != _mapWtx || Mathf.Abs(d.x) > _maxDist.Value * 0.25f || Mathf.Abs(d.y) > _maxDist.Value * 0.25f;
+                GDLast = _reflOwnMaps ? G2 - snap : d;
+            }
+            m.SetVector(ID._GD, GDLast);
+            // mountain fog (valley fog / upslope cloud): own layer, own height map
+            if (Oro != null) { if (!reflCam) Oro.Tick(g, _tod, _cond, _H, _windS); Oro.Apply(m, g); Oro.SetWind(m, _windS); }
             // atmosphere
-            m.SetFloat("_RainOn", _atShafts.Value && (_H > 0.55f || _I > 0.5f || _front != 0) ? 1f : 0f);
-            m.SetFloat("_RainVis", _atRainVis.Value);
-            m.SetFloat("_WetDark", _wetDark.Value);
+            m.SetFloat(ID._RainOn, _atShafts.Value && (_H > 0.55f || _I > 0.5f || _front != 0) ? 1f : 0f);
+            m.SetFloat(ID._RainVis, _atRainVis.Value);
+            m.SetFloat(ID._Rainbow, _atRainbow.Value); m.SetFloat(ID._Glory, _atGlory.Value);
+            m.SetFloat(ID._WetDark, _wetDark.Value);
             // overcast deck: from "cloudy" to "storm" (smoothed conditions)
-            m.SetFloat("_Deck", Mathf.Clamp01(Mathf.InverseLerp(0.55f, 0.85f, _condS)) * _deck.Value);
-            m.SetVector("_WindVel", _level != null ? _level.windVelocity : Vector3.zero);
+            m.SetFloat(ID._Deck, Mathf.Clamp01(Mathf.InverseLerp(0.55f, 0.85f, _condS)) * _deck.Value);
+            m.SetVector(ID._WindVel, _level != null ? _level.windVelocity : Vector3.zero);
             Atmos?.Apply(m, cam);
-            m.SetVector("_OffS", Wrap(g, 1.0, perS) + new Vector3(0, (float)Mod(ev, perS), 0));
-            m.SetVector("_OffD", Wrap(g, 1.3, perD) + new Vector3(0, (float)Mod(ev * 1.7, perD), 0));
-            m.SetFloat("_PerCl", perC); m.SetFloat("_PerCell", perCell); m.SetFloat("_PerS", perS); m.SetFloat("_PerD", perD);
-            m.SetFloat("_PerHum", _perHum.Value); m.SetFloat("_PerIns", _perIns.Value); m.SetFloat("_PerWarp", _perWarp.Value);
-            m.SetFloat("_PerTurb", _perTurb.Value); m.SetFloat("_PerCb", _perCb.Value);
-            m.SetFloat("_Warp", _warp.Value); m.SetFloat("_Turb", _turb.Value); m.SetFloat("_Stretch", _stretch.Value);
-            m.SetFloat("_SizeMix", _sizeMix.Value); m.SetFloat("_Anvil", _anvil.Value);
-            m.SetFloat("_AnvilShift", _anvilShift.Value); m.SetFloat("_Veer", _veer.Value);
-            m.SetFloat("_Hum", _H); m.SetFloat("_Ins", _I);
-            m.SetFloat("_BaseRef", _effBottom); m.SetFloat("_BaseVar", _baseVar.Value);
-            m.SetFloat("_CoverScale", _coverage.Value);
-            m.SetFloat("_Cirrus", _ownCirrus.Value ? _ci : 0f); m.SetFloat("_MidAmt", _midAmt.Value);
-            m.SetFloat("_CiAlt", 9500f);
-            m.SetFloat("_CiTile", _ciTile.Value);
-            m.SetFloat("_FarSteps", Mathf.Clamp(_farSteps.Value, 0, 6));
-            m.SetFloat("_FarShadow", _farShadow.Value);
-            m.SetFloat("_Blur", _blur.Value); m.SetFloat("_ShDark", _shDark.Value); m.SetFloat("_FarSoft", _farSoft.Value);
-            m.SetFloat("_ShDOn", (ShDFrame == Time.frameCount && ShDCam == cam) ? 1f : 0f);
-            m.SetFloat("_PixAng", 2f * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * downscale / Mathf.Max(1, cam.pixelHeight));
-            m.SetFloat("_FrontType", _front);
-            m.SetFloat("_FrontAmt", _frontAmt);
-            m.SetFloat("_FrontPos", Vector2.Dot(new Vector2(5e5f, 5e5f), WindDirL()) - _frontDist.Value * 1000f);
-            m.SetFloat("_FrontWidth", _frontWidth.Value * 1000f);
+            m.SetVector(ID._OffS, Wrap(g, 1.0, perS) + new Vector3(0, (float)Mod(ev, perS), 0));
+            m.SetVector(ID._OffD, Wrap(g, 1.3, perD) + new Vector3(0, (float)Mod(ev * 1.7, perD), 0));
+            m.SetFloat(ID._PerCl, perC); m.SetFloat(ID._PerCell, perCell); m.SetFloat(ID._PerS, perS); m.SetFloat(ID._PerD, perD);
+            m.SetFloat(ID._PerHum, _perHum.Value); m.SetFloat(ID._PerIns, _perIns.Value); m.SetFloat(ID._PerWarp, _perWarp.Value);
+            m.SetFloat(ID._PerTurb, _perTurb.Value); m.SetFloat(ID._PerCb, _perCb.Value);
+            m.SetFloat(ID._Warp, _warp.Value); m.SetFloat(ID._Turb, _turb.Value); m.SetFloat(ID._Stretch, _stretch.Value);
+            m.SetFloat(ID._SizeMix, _sizeMix.Value); m.SetFloat(ID._BaseRough, _baseRough.Value); m.SetFloat(ID._Anvil, _anvil.Value);
+            m.SetFloat(ID._AnvilShift, _anvilShift.Value); m.SetFloat(ID._Veer, _veer.Value);
+            m.SetFloat(ID._Hum, _H); m.SetFloat(ID._Ins, _I);
+            m.SetFloat(ID._BaseRef, _effBottom); m.SetFloat(ID._BaseVar, _baseVar.Value);
+            m.SetFloat(ID._CoverScale, _coverage.Value);
+            m.SetFloat(ID._Cirrus, _ownCirrus.Value ? _ci : 0f); m.SetFloat(ID._MidAmt, _midAmt.Value);
+            m.SetFloat(ID._CiAlt, 9500f);
+            m.SetFloat(ID._CiTile, _ciTile.Value);
+            m.SetFloat(ID._FarSteps, Mathf.Clamp(_farSteps.Value, 0, 6));
+            m.SetFloat(ID._FarShadow, _farShadow.Value);
+            m.SetFloat(ID._Blur, _blur.Value); m.SetFloat(ID._ShDark, _shDark.Value); m.SetFloat(ID._FarSoft, _farSoft.Value);
+            m.SetFloat(ID._ShDOn, (ShDFrame == Time.frameCount && ShDCam == cam) ? 1f : 0f);
+            m.SetFloat(ID._PixAng, 2f * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * downscale / Mathf.Max(1, cam.pixelHeight));
+            m.SetFloat(ID._FrontType, _front);
+            m.SetFloat(ID._FrontAmt, _frontAmt);
+            m.SetFloat(ID._FrontPos, Vector2.Dot(new Vector2(5e5f, 5e5f), WindDirL()) - _frontDist.Value * 1000f);
+            m.SetFloat(ID._FrontWidth, _frontWidth.Value * 1000f);
             float cbTop = Mathf.Max(_cbTop.Value, 9300f);
-            m.SetFloat("_CbTop", cbTop);
-            m.SetFloat("_Bottom", 200f);
-            m.SetFloat("_VolTop", cbTop * (_supercell.Value > 0 ? 1.12f : 1f));
+            m.SetFloat(ID._CbTop, cbTop);
+            m.SetFloat(ID._Bottom, 200f);
+            m.SetFloat(ID._VolTop, cbTop * (_supercell.Value > 0 ? 1.12f : 1f));
             // nuclear blast: rings/caps can be higher than the normal cloud volume
-            if (Nukes != null) { Nukes.Apply(m, cam, g, _windX, _windZ, _H); if (Nukes.Active && Nukes.TopAlt > 0) m.SetFloat("_VolTop", Mathf.Max(cbTop * (_supercell.Value > 0 ? 1.12f : 1f), Nukes.TopAlt)); }
-            m.SetFloat("_Supercell", _supercell.Value);
-            m.SetFloat("_WExt", _maxDist.Value);
-            m.SetVector("_WTS", new Vector4(1f / 1024, 1f / 1024, 1024, 1024));
-            m.SetVector("_PTS", new Vector4(1f / 512, 1f / 512, 512, 512));
+            if (Nukes != null) { Nukes.Apply(m, cam, g, _windX, _windZ, _H); if (Nukes.Active && Nukes.TopAlt > 0) m.SetFloat(ID._VolTop, Mathf.Max(cbTop * (_supercell.Value > 0 ? 1.12f : 1f), Nukes.TopAlt)); }
+            m.SetFloat(ID._Supercell, _supercell.Value);
+            m.SetFloat(ID._WExt, _maxDist.Value);
+            m.SetVector(ID._WTS, new Vector4(1f / 1024, 1f / 1024, 1024, 1024));
+            m.SetVector(ID._PTS, new Vector4(1f / 512, 1f / 512, 512, 512));
 
-            m.SetFloat("_Density", _density.Value);
-            m.SetFloat("_Erosion", _erosion.Value);
-            m.SetFloat("_Dome", _dome.Value);
-            m.SetFloat("_Billow", _billow.Value);
-            m.SetFloat("_Soft", _soft.Value);
-            m.SetFloat("_Shear", _shear.Value);
+            m.SetFloat(ID._Density, _density.Value);
+            m.SetFloat(ID._Erosion, _erosion.Value);
+            m.SetFloat(ID._Dome, _dome.Value);
+            m.SetFloat(ID._Billow, _billow.Value);
+            m.SetFloat(ID._Soft, _soft.Value);
+            m.SetFloat(ID._Shear, _shear.Value);
             // direction of cloud streets, fronts and anvils: fixed per mission. The game picks a new wind heading
             // every so often; rotating this direction rotates the whole field around a point hundreds of km away
             // and the clouds slide for kilometres. The wind still carries the clouds (drift).
-            m.SetVector("_WindDir", WindDirL());
+            m.SetVector(ID._WindDir, WindDirL());
 
-            m.SetFloat("_Steps", _steps.Value);
-            m.SetFloat("_LightSteps", Mathf.Clamp(_lightSteps.Value, 1, 6));
-            m.SetFloat("_MinStep", _minStep.Value);
-            m.SetFloat("_StepGrowth", _stepGrowth.Value);
-            m.SetFloat("_MaxStep", Mathf.Max(_maxStep.Value, _minStep.Value));
-            m.SetFloat("_MaxDist", _maxDist.Value);
-            m.SetFloat("_Jitter", _jitter.Value ? 1 : 0);
-            m.SetFloat("_Frame", Time.frameCount % 64);
-            m.SetFloat("_UseDepth", _useDepth.Value ? 1 : 0);
-            m.SetFloat("_Debug", _debug.Value ? 1 : 0);
+            m.SetFloat(ID._Steps, _steps.Value);
+            m.SetFloat(ID._LightSteps, Mathf.Clamp(_lightSteps.Value, 1, 6));
+            m.SetFloat(ID._LightLod, _lightLod.Value > 0 ? 1 : 0);
+            m.SetFloat(ID._FootOn, _emptySkip.Value && m.passCount > 20 && FootD != null && FootD.IsCreated() ? 1 : 0);
+            m.SetFloat(ID._MinStep, _minStep.Value);
+            m.SetFloat(ID._StepGrowth, _stepGrowth.Value);
+            m.SetFloat(ID._MaxStep, Mathf.Max(_maxStep.Value, _minStep.Value));
+            m.SetFloat(ID._MaxDist, _maxDist.Value);
+            m.SetFloat(ID._Jitter, _jitter.Value ? 1 : 0);
+            m.SetFloat(ID._Frame, Time.frameCount % 64);
+            m.SetFloat(ID._UseDepth, _useDepth.Value ? 1 : 0);
+            m.SetFloat(ID._Debug, _debug.Value ? 1 : 0);
 
-            m.SetFloat("_Absorb", _absorb.Value);
-            m.SetFloat("_LightAbsorb", _lightAbsorb.Value);
-            m.SetFloat("_G1", _g1.Value); m.SetFloat("_G2", _g2.Value); m.SetFloat("_GMix", _gMix.Value);
-            m.SetFloat("_Powder", _powder.Value); m.SetFloat("_PowderK", _powderK.Value);
-            m.SetFloat("_MsA", _msA.Value); m.SetFloat("_MsB", _msB.Value);
-            m.SetFloat("_Exposure", _exposure.Value);
-            m.SetFloat("_Tonemap", _tonemap.Value == 1 || (_tonemap.Value == 2 && !hdr) ? 1 : 0);
+            m.SetFloat(ID._Absorb, _absorb.Value);
+            m.SetFloat(ID._LightAbsorb, _lightAbsorb.Value);
+            m.SetFloat(ID._G1, _g1.Value); m.SetFloat(ID._G2, _g2.Value); m.SetFloat(ID._GMix, _gMix.Value);
+            m.SetFloat(ID._Powder, _powder.Value); m.SetFloat(ID._PowderK, _powderK.Value);
+            m.SetFloat(ID._MsA, _msA.Value); m.SetFloat(ID._MsB, _msB.Value);
+            m.SetFloat(ID._Exposure, _exposure.Value);
+            m.SetFloat(ID._Tonemap, _tonemap.Value == 1 || (_tonemap.Value == 2 && !hdr) ? 1 : 0);
 
             // sun (or moon at night)
             Light sun = _level.sun, moon = _level.moon;
@@ -1030,8 +1324,8 @@ namespace NoAtmoFX
                 if (amt > 0.001f)
                 {
                     ShaftsActive = true;
-                    m.SetFloat("_ShaftAmt", amt);
-                    m.SetFloat("_ShaftSig", 6e-5f + RenderSettings.fogDensity * 0.5f);
+                    m.SetFloat(ID._ShaftAmt, amt);
+                    m.SetFloat(ID._ShaftSig, 6e-5f + RenderSettings.fogDensity * 0.5f);
                 }
             }
             // god rays: sun above the horizon and near/inside the screen
@@ -1042,9 +1336,9 @@ namespace NoAtmoFX
                 if (vp.z > 0 && vp.x > -0.6f && vp.x < 1.6f && vp.y > -0.6f && vp.y < 1.6f)
                 {
                     RaysActive = true;
-                    m.SetVector("_SunUV", new Vector2(vp.x, vp.y));
+                    m.SetVector(ID._SunUV, new Vector2(vp.x, vp.y));
                     float edge = Mathf.Clamp01(1.6f - Mathf.Max(Mathf.Abs(vp.x - 0.5f), Mathf.Abs(vp.y - 0.5f)) * 2f / 1.1f);
-                    m.SetFloat("_RaysAmt", _atRays.Value * Mathf.Clamp01(sunEl * 8f + 0.3f) * edge);
+                    m.SetFloat(ID._RaysAmt, _atRays.Value * Mathf.Clamp01(sunEl * 8f + 0.3f) * edge);
                 }
             }
             // storm: the upper sky (anvils, altostratus) removes much of the direct sun from ALL clouds
@@ -1053,8 +1347,8 @@ namespace NoAtmoFX
             storm = Mathf.Clamp01(storm);
             Color Gray(Color c) { float g = c.r * 0.3f + c.g * 0.55f + c.b * 0.15f; return new Color(g, g, g * 1.03f, c.a); }
             sunCol = Color.Lerp(sunCol, Gray(sunCol), 0.5f * storm) * (1f - 0.3f * storm);
-            m.SetVector("_SunDir", sunDir);
-            m.SetVector("_SunCol", sunCol * _sunMul.Value);
+            m.SetVector(ID._SunDir, sunDir);
+            m.SetVector(ID._SunCol, sunCol * _sunMul.Value);
             Color amb = RenderSettings.ambientSkyColor * RenderSettings.ambientIntensity;
             Color ambB = RenderSettings.ambientEquatorColor * RenderSettings.ambientIntensity;
             // below the game's layer in bad weather the game makes sky light grey and 25% dimmer (fake overcast):
@@ -1072,12 +1366,12 @@ namespace NoAtmoFX
             }
             amb = Color.Lerp(amb, Gray(amb), 0.75f * storm) * (1f - 0.25f * storm);
             ambB = Color.Lerp(ambB, Gray(ambB), 0.75f * storm) * (1f - 0.25f * storm);
-            m.SetVector("_AmbTop", amb * _ambMul.Value);
-            m.SetVector("_AmbBottom", ambB * _ambMul.Value * 0.7f);
+            m.SetVector(ID._AmbTop, amb * _ambMul.Value);
+            m.SetVector(ID._AmbBottom, ambB * _ambMul.Value * 0.7f);
 
-            m.SetFloat("_FogMode", RenderSettings.fog ? (RenderSettings.fogMode == FogMode.Linear ? 1 : RenderSettings.fogMode == FogMode.Exponential ? 2 : 3) : 0);
-            m.SetFloat("_FogStart", RenderSettings.fogStartDistance);
-            m.SetFloat("_FogEnd", RenderSettings.fogEndDistance);
+            m.SetFloat(ID._FogMode, RenderSettings.fog ? (RenderSettings.fogMode == FogMode.Linear ? 1 : RenderSettings.fogMode == FogMode.Exponential ? 2 : 3) : 0);
+            m.SetFloat(ID._FogStart, RenderSettings.fogStartDistance);
+            m.SetFloat(ID._FogEnd, RenderSettings.fogEndDistance);
             // in bad weather (below the game's layer) the game adds +0.001 fog to fake an overcast sky:
             // on our clouds this killed all the light (5 km of cloud turned into grey fog). Remove that part.
             float fogD = RenderSettings.fogDensity;
@@ -1087,15 +1381,15 @@ namespace NoAtmoFX
                 float n4 = n3 * Mathf.InverseLerp(0.8f, 1f, _level.conditions);
                 fogD = Mathf.Max(fogD - n4 * 0.001f, 3e-5f);
             }
-            m.SetFloat("_FogDensity", fogD);
+            m.SetFloat(ID._FogDensity, fogD);
             // rain fog (pass 14): height layer below the base
-            m.SetFloat("_RFogSig", FogExtra);
-            m.SetFloat("_RFogH", Mathf.Clamp(_effBottom * 0.6f, 300f, 1500f));
-            m.SetFloat("_RFogTop", _effBottom + 100f);
+            m.SetFloat(ID._RFogSig, FogExtra);
+            m.SetFloat(ID._RFogH, Mathf.Clamp(_effBottom * 0.6f, 300f, 1500f));
+            m.SetFloat(ID._RFogTop, _effBottom + 100f);
             float tauUp = (Wet != null && Wet.ProbeValid) ? Wet.ProbeTau : 0f;
-            m.SetFloat("_RFogSunVis", Mathf.Exp(-tauUp));
-            m.SetColor("_FogCol", RenderSettings.fogColor);
-            m.SetFloat("_FogAmt", _fogAmt.Value);
+            m.SetFloat(ID._RFogSunVis, Mathf.Exp(-tauUp));
+            m.SetColor(ID._FogCol, RenderSettings.fogColor);
+            m.SetFloat(ID._FogAmt, _fogAmt.Value);
             return m;
         }
 
@@ -1108,15 +1402,25 @@ namespace NoAtmoFX
 
         void DrawWin(int id)
         {
-            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Nuclear", "Quality" } })
+            foreach (var row in new[] { new[] { "General", "Weather", "Layer", "Shape", "Scale", "Variation" }, new[] { "Wind", "Storm", "Lighting", "Shadows", "Glass", "Atmosphere", "Nuclear", "Quality", "Multiplayer" } })
             {
                 GUILayout.BeginHorizontal();
                 foreach (var s in row)
                     if (GUILayout.Toggle(_section == s, Pt && PtTab.TryGetValue(s, out var ps) ? ps : s, GUI.skin.button)) _section = s;
                 GUILayout.EndHorizontal();
             }
-            if (Pt) GUILayout.Label($"Tempo: condições {_cond:F2}, hora {_tod:F1} (aquecimento {_heat:F2}), umidade {_H:F2}, instabilidade {_I:F2}, frente {(_front == 1 ? "fria" : _front == 2 ? "quente" : "nenhuma")}, base ref {_effBottom:F0} m, cobertura {_effCoverage:F2}, vento {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
-            else GUILayout.Label($"Weather: conditions {_cond:F2}, hour {_tod:F1} (heating {_heat:F2}), humidity {_H:F2}, instability {_I:F2}, front {(_front == 1 ? "cold" : _front == 2 ? "warm" : "none")}, base ref {_effBottom:F0} m, coverage {_effCoverage:F2}, wind {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s");
+            if (Pt) GUILayout.Label($"Tempo: condições {_cond:F2}, hora {_tod:F1} (aquecimento {_heat:F2}), umidade {_H:F2}, instabilidade {_I:F2}, frente {(_front == 1 ? "fria" : _front == 2 ? "quente" : "nenhuma")}, base ref {_effBottom:F0} m, cobertura {_effCoverage:F2}, vento {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s, fonte {WeatherSourceName()}");
+            else GUILayout.Label($"Weather: conditions {_cond:F2}, hour {_tod:F1} (heating {_heat:F2}), humidity {_H:F2}, instability {_I:F2}, front {(_front == 1 ? "cold" : _front == 2 ? "warm" : "none")}, base ref {_effBottom:F0} m, coverage {_effCoverage:F2}, wind {(_level != null ? _level.windVelocity.magnitude : 0):F1} m/s, source {WeatherSourceName()}");
+            if (Boscali != null && Boscali.Present) GUILayout.Label((Pt ? "Clima Boscali (Unified Effects): " : "Boscali weather (Unified Effects): ") + Boscali.Status);
+            if (_section == "Multiplayer" && Sync != null)
+            {
+                string st = !Sync.Shared ? T("not in a multiplayer mission", "fora de missão multijogador") : Sync.Status;
+                if (Pt && Sync.Shared) st = Sync.IsHost ? st.Replace("client(s) with NoAtmoFX", "cliente(s) com NoAtmoFX") : Sync.HostHasMod ? "seguindo o host (NoAtmoFX)" : "relógio da missão (host sem NoAtmoFX ou ainda não respondeu)";
+                GUILayout.Label(T("Sync: ", "Sincronia: ") + st + (Sync.Shared ? $", {T("mission time", "tempo da missão")} {Sync.T:F0} s" : ""));
+                GUILayout.Label(T("Cloud settings code: ", "Código das configurações de nuvem: ") + Sync.SettingsCode() + (Sync.UsingHostSettings ? T(" (host's)", " (do host)") : "") +
+                    T("  — same code = same clouds when the host has no NoAtmoFX.", "  — mesmo código = mesmas nuvens quando o host não tem NoAtmoFX."));
+            }
+            if (_section == "Quality") { if (_perfMeter.Value) Perf.Draw(T); DrawBench(); }
             if (_section == "Nuclear" && Nukes != null && GUILayout.Button(T("Test blast now (clouds only, ahead of the camera)", "Explosão de teste agora (só nas nuvens, à frente da câmera)"))) Nukes.TestNow = true;
             _scroll = GUILayout.BeginScrollView(_scroll);
             var small = new GUIStyle(GUI.skin.label) { fontSize = 11, wordWrap = true };
@@ -1141,6 +1445,14 @@ namespace NoAtmoFX
                     if (v != i.Value) i.Value = v;
                 }
                 else if (e is ConfigEntry<bool> b) b.Value = GUILayout.Toggle(b.Value, " " + key);
+                else if (e is ConfigEntry<string> sv && e.Description.AcceptableValues is AcceptableValueList<string> lv)
+                {
+                    GUILayout.Label($"{key}: {sv.Value}");
+                    GUILayout.BeginHorizontal();
+                    foreach (var o in lv.AcceptableValues)
+                        if (GUILayout.Toggle(sv.Value == o, o, GUI.skin.button) && sv.Value != o) sv.Value = o;
+                    GUILayout.EndHorizontal();
+                }
                 else continue;
                 string desc = e.Description.Description;
                 if (Pt && PtDesc.TryGetValue(kv.Key.Section + "/" + key, out var pd)) desc = pd;
@@ -1152,10 +1464,79 @@ namespace NoAtmoFX
             if (GUILayout.Button(T("Reset this tab", "Padrão desta aba")))
                 foreach (var kv in Config)
                     if (kv.Key.Section == _section && !(kv.Value is ConfigEntry<KeyboardShortcut>)) kv.Value.BoxedValue = kv.Value.DefaultValue;
-            if (GUILayout.Button(T("Save", "Salvar"))) Config.Save();
+            if (GUILayout.Button(T("Save", "Salvar"))) SaveConfig();
             if (GUILayout.Button(T("Diagnostic to log", "Diagnóstico no log"))) Dump();
             GUILayout.EndHorizontal();
             GUI.DragWindow(new Rect(0, 0, 10000, 22));
+        }
+
+        // ---------- benchmark (Quality tab) ----------
+        // The game build gives mods no GPU timers, so the cost of each part is measured by switching parts on and
+        // off for a few seconds each and comparing the frame time. Settings are restored and never saved.
+        struct BenchStep { public string en, pt; public System.Action set; }
+        BenchStep[] _bSteps; int _bIdx = -1; float _bT0; double _bSum; int _bN; float _bWorst; readonly List<float> _bDts = new List<float>();
+        string[] _bRes; bool _bSave;
+        bool _bOn, _bSh, _bRain, _bSlice, _bSkip; float _bRays, _bShafts; int _bEvery, _bDs, _bTmp, _bLod;
+        const float BenchWarm = 1.5f, BenchLen = 5f;
+
+        void StartBench()
+        {
+            _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value; _bTmp = _temporal.Value; _bSkip = _emptySkip.Value; _bLod = _lightLod.Value;
+            void Mine() { _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; _emptySkip.Value = _bSkip; _lightLod.Value = _bLod; }
+            _bSteps = new[]
+            {
+                new BenchStep { en = "Mod off", pt = "Mod desligado", set = () => { Mine(); _on.Value = false; } },
+                new BenchStep { en = "Clouds only (no shadows, rays, shafts, rain curtains)", pt = "Só nuvens (sem sombra, raios, feixes, cortinas)", set = () => { Mine(); _shOn.Value = false; _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
+                new BenchStep { en = "Clouds + shadows", pt = "Nuvens + sombras", set = () => { Mine(); _atRays.Value = 0; _atShafts2.Value = 0; _atShafts.Value = false; } },
+                new BenchStep { en = "Your settings", pt = "Suas configurações", set = () => Mine() },
+                new BenchStep { en = "Your settings without the 1.4 savings (EmptySkip and LightLOD off)", pt = "Suas configurações sem as economias da 1.4 (EmptySkip e LightLOD desligados)", set = () => { Mine(); _emptySkip.Value = false; _lightLod.Value = 0; } },
+                new BenchStep { en = "Your settings, old 1.1 way", pt = "Suas configurações, jeito antigo 1.1", set = () => { Mine(); _mapSlicing.Value = false; _shEvery.Value = 1; } },
+                new BenchStep { en = "Your settings, one Downscale step lower", pt = "Suas configurações, Downscale um nível abaixo", set = () => { Mine(); _downscale.Value = Mathf.Min(_bDs + 1, 4); } },
+                _bTmp > 0 ? new BenchStep { en = "Your settings, temporal off", pt = "Suas configurações, temporal desligado", set = () => { Mine(); _temporal.Value = 0; } }
+                          : new BenchStep { en = "Your settings, temporal 2x2", pt = "Suas configurações, temporal 2x2", set = () => { Mine(); _temporal.Value = 2; } },
+            };
+            _bRes = new string[_bSteps.Length];
+            _bSave = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            _bIdx = 0; _bSteps[0].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
+            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Temporal {_bTmp}, Steps {_steps.Value}, preset {_preset.Value}");
+        }
+
+        void StopBench(bool done)
+        {
+            if (_bIdx < 0) return;
+            _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; _emptySkip.Value = _bSkip; _lightLod.Value = _bLod;
+            Config.SaveOnConfigSet = _bSave;
+            _bIdx = -1;
+            if (done) Log.LogInfo("Benchmark results:\n" + string.Join("\n", _bRes));
+        }
+
+        void BenchTick()
+        {
+            if (_bIdx < 0) return;
+            float t = Time.unscaledTime - _bT0;
+            if (t > BenchWarm) { float dt = Time.unscaledDeltaTime * 1000f; _bSum += dt; _bN++; _bDts.Add(dt); }
+            if (t < BenchWarm + BenchLen) return;
+            _bDts.Sort();
+            float avg = _bN > 0 ? (float)(_bSum / _bN) : 0, p99 = _bDts.Count > 0 ? _bDts[Mathf.Min(_bDts.Count - 1, (int)(_bDts.Count * 0.99f))] : 0;
+            var st = _bSteps[_bIdx];
+            _bRes[_bIdx] = $"{T(st.en, st.pt)}: {avg:F1} ms ({(avg > 0 ? 1000f / avg : 0):F0} fps), {T("worst 1%", "pior 1%")} {p99:F1} ms";
+            if (++_bIdx >= _bSteps.Length) { StopBench(true); return; }
+            _bSteps[_bIdx].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
+        }
+
+        void DrawBench()
+        {
+            if (_bIdx >= 0)
+            {
+                GUILayout.Label(T($"Benchmark running ({_bIdx + 1}/{_bSteps.Length}): {_bSteps[_bIdx].en}. Keep the camera still.",
+                                  $"Teste rodando ({_bIdx + 1}/{_bSteps.Length}): {_bSteps[_bIdx].pt}. Deixe a câmera parada."));
+                if (GUILayout.Button(T("Stop", "Parar"))) StopBench(false);
+            }
+            else if (GUILayout.Button(T($"Benchmark: switch parts on/off ({_bSteps?.Length ?? 8} x {BenchWarm + BenchLen:F0} s, camera still; settings are restored)",
+                                        $"Teste de desempenho: liga/desliga cada parte ({_bSteps?.Length ?? 8} x {BenchWarm + BenchLen:F0} s, câmera parada; as configurações voltam)")))
+                StartBench();
+            if (_bRes != null)
+                foreach (var r in _bRes) if (r != null) GUILayout.Label(r);
         }
 
         void Dump()
@@ -1191,8 +1572,93 @@ namespace NoAtmoFX
         static readonly int WB = Shader.PropertyToID("_WxB");
         static readonly int WC = Shader.PropertyToID("_WxC");
         static readonly int WP = Shader.PropertyToID("_WarpTex");
-        readonly ProfilingSampler _prof = new ProfilingSampler("NOClouds");
         float _probeT = -10;
+
+        System.Action<AsyncGPUReadbackRequest> _onProbe;
+        void OnProbe(AsyncGPUReadbackRequest r)
+        {
+            if (r.hasError) return;
+            var d = r.GetData<Color>();
+            var v = d[0];
+            var w0 = _p.Wet; var at = _p.Atmos;
+            if (w0 != null) { w0.ProbeCloud = v.r; w0.ProbeTau = v.g; w0.ProbeCb = v.b; w0.ProbeAlt = v.a; w0.ProbeValid = true; }
+            _p.ProbeCloudAt = v.r; _p.ProbeTauAt = v.g; _p.ProbeAtValid = true;
+            if (at != null && d.Length > 1) { at.ProbeRain = d[1].r; at.ProbeCb = d[1].g; at.ProbeRainValid = true; }
+        }
+
+        // ---------- temporal reprojection ----------
+        static readonly int T_Fresh = Shader.PropertyToID("_TFresh"), T_Hist = Shader.PropertyToID("_THist"), T_Size = Shader.PropertyToID("_TSize"),
+            T_Mode = Shader.PropertyToID("_TMode"), T_BL = Shader.PropertyToID("_TPrevBL"), T_Rx = Shader.PropertyToID("_TPrevRx"),
+            T_Uy = Shader.PropertyToID("_TPrevUy"), T_F = Shader.PropertyToID("_TPrevF"), T_Move = Shader.PropertyToID("_TMove");
+        static int _tSupport = -1;
+        static bool TemporalSupported(Material mat)
+        {
+            if (_tSupport < 0)
+            {
+                bool fmt = SystemInfo.IsFormatSupported(GraphicsFormat.R32G32B32A32_UInt, FormatUsage.Render);
+                _tSupport = fmt && mat.passCount >= 18 ? 1 : 0;
+                NOCloudsPlugin.Log.LogInfo(_tSupport == 1 ? "Temporal reprojection available" :
+                    "Temporal reprojection unavailable (" + (!fmt ? "no integer render target" : "shader bundle older than 1.3, run NOClouds > Build bundle") + "); clouds are drawn in full");
+            }
+            return _tSupport == 1;
+        }
+
+        static RenderTexture MakeRT(RenderTexture rt, int w, int h, GraphicsFormat f, FilterMode fm, string name)
+        {
+            if (rt != null && rt.width == w && rt.height == h) return rt;
+            if (rt != null) rt.Release();
+            rt = new RenderTexture(w, h, f, GraphicsFormat.None) { name = name, filterMode = fm, wrapMode = TextureWrapMode.Clamp };
+            rt.Create();
+            return rt;
+        }
+
+        static float Wrap(float d) => d > 5e5f ? d - 1e6f : d < -5e5f ? d + 1e6f : d;
+
+        // Marches only part of the pixels (1 of 2x2, or 1 of 2) and rebuilds the full image from the previous one.
+        // A full march (into the history, so the next frames have a clean start) when there is nothing to reproject
+        // from or the light changes too fast for old pixels: lightning, nuclear flash, camera cut, size change.
+        RenderTexture MarchTemporal(CommandBuffer cmd, Camera cam, Material mat, int w, int h)
+        {
+            var p = _p;
+            int mode = p.TemporalMode;
+            int sx = 2, sy = mode == 1 ? 1 : 2;
+            int fw = (w + sx - 1) / sx, fh = (h + sy - 1) / sy;
+            p.THist0 = MakeRT(p.THist0, w, h, GraphicsFormat.R16G16B16A16_SFloat, FilterMode.Bilinear, "NOClouds history A");
+            p.THist1 = MakeRT(p.THist1, w, h, GraphicsFormat.R16G16B16A16_SFloat, FilterMode.Bilinear, "NOClouds history B");
+            bool sizeChanged = p.TFresh == null || p.TFresh.width != fw || p.TFresh.height != fh;
+            p.TFresh = MakeRT(p.TFresh, fw, fh, GraphicsFormat.R32G32B32A32_UInt, FilterMode.Point, "NOClouds temporal");
+            var prev = p.THistIdx == 0 ? p.THist0 : p.THist1;
+            var cur = p.THistIdx == 0 ? p.THist1 : p.THist0;
+
+            float flash = p.Atmos != null ? p.Atmos.FlashNow : 0, nk = p.Nukes != null ? p.Nukes.LightNow : 0;
+            Vector3 move = p.TNowPos - p.TPrevPos; move.x = Wrap(move.x); move.z = Wrap(move.z);
+            bool full = !p.THistOk || sizeChanged || p.TCam != cam || Time.frameCount - p.TLastFrame != 1
+                     || flash > 0.01f || p.TFlashPrev > 0.01f
+                     || Mathf.Abs(nk - p.TNukePrev) > 0.03f * Mathf.Max(nk, 0.05f)
+                     || Vector3.Angle(p.TNowF, p.TPrevF) > 10f || move.magnitude > 500f;
+            p.TFlashPrev = flash; p.TNukePrev = nk;
+
+            using (new ProfilingScope(cmd, Perf.March))
+            {
+                if (full) cmd.Blit((Texture)null, cur, mat, 0);
+                else
+                {
+                    p.TPhase = (p.TPhase + 1) & (mode == 1 ? 1 : 3);
+                    cmd.SetGlobalVector(T_Size, new Vector4(w, h, fw, fh));
+                    cmd.SetGlobalVector(T_Mode, new Vector4(sx, sy, p.TPhase, 1));
+                    cmd.SetGlobalVector(T_BL, p.TPrevBL); cmd.SetGlobalVector(T_Rx, p.TPrevRx);
+                    cmd.SetGlobalVector(T_Uy, p.TPrevUy); cmd.SetGlobalVector(T_F, p.TPrevF);
+                    cmd.SetGlobalVector(T_Move, move);
+                    cmd.Blit((Texture)null, p.TFresh, mat, 16);
+                    cmd.SetGlobalTexture(T_Fresh, p.TFresh);
+                    cmd.SetGlobalTexture(T_Hist, prev);
+                    cmd.Blit((Texture)null, cur, mat, 17);
+                }
+            }
+            p.THistOk = true; p.THistIdx ^= 1; p.TCam = cam; p.TLastFrame = Time.frameCount;
+            p.TPrevBL = p.TNowBL; p.TPrevRx = p.TNowRx; p.TPrevUy = p.TNowUy; p.TPrevF = p.TNowF; p.TPrevPos = p.TNowPos;
+            return cur;
+        }
 
         public CloudPass(NOCloudsPlugin p)
         {
@@ -1220,41 +1686,33 @@ namespace NoAtmoFX
                 return;
             }
             var cmd = CommandBufferPool.Get("NOClouds");
-            using (new ProfilingScope(cmd, _prof))
+            using (new ProfilingScope(cmd, refl ? Perf.Refl : Perf.Clouds))
             {
                 var desc = cd.cameraTargetDescriptor;
                 int w = Mathf.Max(1, desc.width / ds), h = Mathf.Max(1, desc.height / ds);
                 // weather maps are centered on the camera: the probe is elsewhere, so rebuild them for it and
                 // force the main camera to rebuild its own afterwards
-                if (refl) _p.WxFrame = -1;
-                _p.EnsureWeather(cmd, mat);
-                if (refl) _p.WxFrame = -1;
+                _p.EnsureWeather(cmd, mat, refl);
+                bool temporal = !refl && _p.TemporalMode > 0 && TemporalSupported(mat);
                 var rt = refl ? _p.ReflCloudRT : _p.CloudRT;
-                if (rt == null || rt.width != w || rt.height != h)
+                if (temporal) rt = null;
+                else if (rt == null || rt.width != w || rt.height != h)
                 {
                     if (rt != null) rt.Release();
                     rt = new RenderTexture(w, h, 0, RenderTextureFormat.ARGBHalf) { name = refl ? "NOCloudsRT probe" : "NOCloudsRT", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
                     rt.Create();
                     if (refl) _p.ReflCloudRT = rt; else _p.CloudRT = rt;
                 }
-                cmd.SetGlobalVector("_NOCTexel", new Vector4(1f / w, 1f / h, w, h));
+                cmd.SetGlobalVector(ID._NOCTexel, new Vector4(1f / w, 1f / h, w, h));
                 // cloud probe at the aircraft (for wet glass), read back without stalling the GPU
                 if (!refl && Time.time - _probeT > 0.1f)
                 {
                     _probeT = Time.time;
                     if (_p.ProbeRT == null) { _p.ProbeRT = new RenderTexture(2, 1, 0, RenderTextureFormat.ARGBFloat) { name = "NOC probe", filterMode = FilterMode.Point }; _p.ProbeRT.Create(); }
                     cmd.Blit((Texture)null, _p.ProbeRT, mat, 8);
-                    var w0 = _p.Wet; var at = _p.Atmos; var pl = _p;
-                    if (w0 != null) w0.ProbeTime = Time.time;
-                    cmd.RequestAsyncReadback(_p.ProbeRT, r =>
-                    {
-                        if (r.hasError) return;
-                        var d = r.GetData<Color>();
-                        var v = d[0];
-                        if (w0 != null) { w0.ProbeCloud = v.r; w0.ProbeTau = v.g; w0.ProbeCb = v.b; w0.ProbeAlt = v.a; w0.ProbeValid = true; }
-                        pl.ProbeCloudAt = v.r; pl.ProbeTauAt = v.g; pl.ProbeAtValid = true;
-                        if (at != null && d.Length > 1) { at.ProbeRain = d[1].r; at.ProbeCb = d[1].g; at.ProbeRainValid = true; }
-                    });
+                    if (_p.Wet != null) _p.Wet.ProbeTime = Time.time;
+                    if (_onProbe == null) _onProbe = OnProbe;   // one delegate for the session (no garbage every 0.1 s)
+                    cmd.RequestAsyncReadback(_p.ProbeRT, _onProbe);
                 }
                 // cumulonimbus map for lightning (every 3 s)
                 if (!refl && _p.Atmos != null && Time.time - _p.Atmos.CbMapTime > 3f)
@@ -1265,8 +1723,9 @@ namespace NoAtmoFX
                     float ext = _p.WExtNow; Vector2 gd = _p.GDLast; Vector3 cpos = cam.transform.position;
                     cmd.RequestAsyncReadback(_p.CbRT, r => { if (!r.hasError) at.OnCbMap(r.GetData<Color>(), 96, ext, gd, cpos); });
                 }
-                cmd.Blit((Texture)null, rt, mat, 0);
-                if (!refl) _p.RTFrame = Time.frameCount;
+                if (temporal) rt = MarchTemporal(cmd, cam, mat, w, h);
+                else using (new ProfilingScope(cmd, refl ? null : Perf.March)) cmd.Blit((Texture)null, rt, mat, 0);
+                if (!refl) { _p.THistOk &= temporal; _p.CloudImg = rt; _p.RTFrame = Time.frameCount; }
                 if (ownW)
                 {
                     // sea first (with the camera depth), then the clouds on top of everything
@@ -1299,7 +1758,6 @@ namespace NoAtmoFX
     class ShadowPass : ScriptableRenderPass
     {
         readonly NOCloudsPlugin _p;
-        readonly ProfilingSampler _prof = new ProfilingSampler("NOClouds shadow");
         static readonly int MainTex = Shader.PropertyToID("_MainLightCookieTexture");
         static readonly int MainW2L = Shader.PropertyToID("_MainLightWorldToLight");
         static readonly int MainFmt = Shader.PropertyToID("_MainLightCookieTextureFormat");
@@ -1309,29 +1767,50 @@ namespace NoAtmoFX
             ref var cd = ref renderingData.cameraData;
             var mat = _p.Prepare(cd.camera, cd.isHdrEnabled, out int _);
             if (mat == null) return;
-            if (!_p.PrepareShadow(cd.camera, mat, out var w2c, out int res)) return;
+            if (!_p.PrepareShadow(cd.camera, mat, out var fr)) { _p.ShCookie.ok = _p.ShDepth.ok = false; return; }
+            int res = fr.res;
             var cmd = CommandBufferPool.Get("NOClouds shadow");
-            using (new ProfilingScope(cmd, _prof))
+            using (new ProfilingScope(cmd, Perf.Shadow))
             {
                 _p.EnsureWeather(cmd, mat);
+                // the cookie and the opacity depth map take turns (ShadowUpdateEvery); both are redrawn at once
+                // after a jump (spawn, camera switch), a resolution change or a sun change
+                int k = _p.ShEvery, ph = Time.frameCount % k;
+                bool Stale(NOCloudsPlugin.ShFrame o) => !o.ok || o.res != res || o.S != fr.S || Quaternion.Angle(o.q, fr.q) > 0.5f
+                                                      || (o.centerG - fr.centerG).sqrMagnitude > fr.S * fr.S * 0.0025f;
+                bool doCookie = ph == 0 || Stale(_p.ShCookie);
+                bool doDepth = ph == k / 2 || Stale(_p.ShDepth);
                 var rt = _p.ShadowRT;
                 if (rt == null || rt.width != res)
                 {
                     if (rt != null) rt.Release();
                     rt = _p.ShadowRT = new RenderTexture(res, res, 0, RenderTextureFormat.R8) { name = "NOC_Shadow", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
-                    rt.Create();
+                    rt.Create(); doCookie = true;
                 }
-                cmd.Blit((Texture)null, rt, mat, 6);
+                if (doCookie)
+                {
+                    NOCloudsPlugin.ApplyShFrame(cmd, cd.camera, fr);
+                    cmd.Blit((Texture)null, rt, mat, 6);
+                    _p.ShCookie = fr;
+                }
                 var rd = _p.ShadowDRT;
                 if (rd == null || rd.width != res)
                 {
                     if (rd != null) rd.Release();
                     rd = _p.ShadowDRT = new RenderTexture(res, res, 0, RenderTextureFormat.RFloat) { name = "NOC_ShadowDepth", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
-                    rd.Create();
+                    rd.Create(); doDepth = true;
                 }
-                cmd.Blit((Texture)null, rd, mat, 7);
-                cmd.SetGlobalTexture("_NOCShD", rd);
+                if (doDepth)
+                {
+                    NOCloudsPlugin.ApplyShFrame(cmd, cd.camera, fr);
+                    cmd.Blit((Texture)null, rd, mat, 7);
+                    _p.ShDepth = fr;
+                }
+                // the rest of the frame (cloud lighting, light shafts) reads the depth map with its own frame
+                NOCloudsPlugin.ApplyShFrame(cmd, cd.camera, _p.ShDepth);
+                cmd.SetGlobalTexture(ID._NOCShD, rd);
                 _p.ShDFrame = Time.frameCount; _p.ShDCam = cd.camera;
+                var w2c = NOCloudsPlugin.CookieMatrix(_p.ShCookie);
                 cmd.SetGlobalTexture(MainTex, rt);
                 cmd.SetGlobalMatrix(MainW2L, w2c);
                 cmd.SetGlobalFloat(MainFmt, 2f);   // "Red" format
@@ -1347,7 +1826,6 @@ namespace NoAtmoFX
     class WaterPass : ScriptableRenderPass
     {
         readonly NOCloudsPlugin _p;
-        readonly ProfilingSampler _prof = new ProfilingSampler("NOClouds water");
         public WaterPass(NOCloudsPlugin p)
         {
             _p = p;
@@ -1356,11 +1834,11 @@ namespace NoAtmoFX
         }
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            var rt = _p.CloudRT;
+            var rt = _p.CloudImg;
             var mat = _p.Mat;
             if (rt == null || mat == null || _p.RTFrame != Time.frameCount) return;
             var cmd = CommandBufferPool.Get("NOClouds water");
-            using (new ProfilingScope(cmd, _prof))
+            using (new ProfilingScope(cmd, Perf.Water))
             {
                 cmd.SetGlobalFloat(CloudPass.WaterMode, 1f);
                 cmd.Blit(rt, renderingData.cameraData.renderer.cameraColorTargetHandle, mat, 1);
