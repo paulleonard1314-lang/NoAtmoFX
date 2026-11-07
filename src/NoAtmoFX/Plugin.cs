@@ -1479,6 +1479,7 @@ namespace NoAtmoFX
         bool _bOn, _bSh, _bRain, _bSlice, _bSkip; float _bRays, _bShafts; int _bEvery, _bDs, _bTmp, _bLod;
         const float BenchWarm = 1.5f, BenchLen = 5f;
 
+        int _bVsync, _bFps;
         void StartBench()
         {
             _bOn = _on.Value; _bSh = _shOn.Value; _bRain = _atShafts.Value; _bSlice = _mapSlicing.Value; _bRays = _atRays.Value; _bShafts = _atShafts2.Value; _bEvery = _shEvery.Value; _bDs = _downscale.Value; _bTmp = _temporal.Value; _bSkip = _emptySkip.Value; _bLod = _lightLod.Value;
@@ -1497,8 +1498,11 @@ namespace NoAtmoFX
             };
             _bRes = new string[_bSteps.Length];
             _bSave = Config.SaveOnConfigSet; Config.SaveOnConfigSet = false;
+            // VSync / frame cap would round every result to 16.7 / 33.3 / 50 ms and hide the differences: off while it runs
+            _bVsync = QualitySettings.vSyncCount; _bFps = Application.targetFrameRate;
+            QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1;
             _bIdx = 0; _bSteps[0].set(); _bT0 = Time.unscaledTime; _bSum = 0; _bN = 0; _bDts.Clear();
-            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Temporal {_bTmp}, Steps {_steps.Value}, preset {_preset.Value}");
+            Log.LogInfo($"Benchmark started: GPU {SystemInfo.graphicsDeviceName}, {Screen.width}x{Screen.height}, Downscale {_bDs}, Temporal {_bTmp}, Steps {_steps.Value}, preset {_preset.Value}, VSync was {_bVsync}, frame cap {_bFps} (both off during the run)");
         }
 
         void StopBench(bool done)
@@ -1506,6 +1510,7 @@ namespace NoAtmoFX
             if (_bIdx < 0) return;
             _on.Value = _bOn; _shOn.Value = _bSh; _atShafts.Value = _bRain; _mapSlicing.Value = _bSlice; _atRays.Value = _bRays; _atShafts2.Value = _bShafts; _shEvery.Value = _bEvery; _downscale.Value = _bDs; _temporal.Value = _bTmp; _emptySkip.Value = _bSkip; _lightLod.Value = _bLod;
             Config.SaveOnConfigSet = _bSave;
+            QualitySettings.vSyncCount = _bVsync; Application.targetFrameRate = _bFps;
             _bIdx = -1;
             if (done) Log.LogInfo("Benchmark results:\n" + string.Join("\n", _bRes));
         }
