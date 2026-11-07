@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1 (unreleased)
+
+- Default quality is now the **High** preset (Ultra's look with temporal 2x2). Configs still on the 1.4 factory values move to High once; settings changed by hand are kept.
+
 ## 1.4.0 (2026-11-07)
 
 Faster raymarch, same look. Needs the new shader bundle (with the old bundle the DLL simply skips the new parts).
